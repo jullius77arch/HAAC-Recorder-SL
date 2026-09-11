@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Resources;
 using System.Windows;
 using System.Windows.Markup;
 using System.Windows.Navigation;
@@ -14,6 +13,8 @@ namespace HAAC_Recorder_SL
     {
         /// <summary>
         /// Provides easy access to the root frame of the Phone Application.
+        /// MainPage hooks its Obscured/Unobscured events to tell when the
+        /// screen has locked.
         /// </summary>
         public static PhoneApplicationFrame RootFrame { get; private set; }
 
@@ -26,11 +27,20 @@ namespace HAAC_Recorder_SL
         public static bool RunningUnderLockScreenEnabled { get; private set; }
 
         /// <summary>
-        /// Non-null if disabling idle detection threw. Surfaced in the UI so
-        /// a failure here is visible rather than silently turning the test
-        /// into a no-op.
+        /// Non-null if disabling idle detection threw. Surfaced in the UI so a
+        /// failure here is visible rather than silently turning lock-screen
+        /// recording into a no-op three hours into a take.
         /// </summary>
         public static string LockScreenSetupError { get; private set; }
+
+        /// <summary>
+        /// Set by MainPage when a take was cut short by deactivation, so the
+        /// next activation can say what happened. A plain static rather than
+        /// PhoneApplicationService.State: it only has to survive a fast
+        /// app-switch back, and after a real tombstone the recording is over
+        /// and already reported on disk anyway.
+        /// </summary>
+        public static bool TakeEndedByDeactivation { get; set; }
 
         public App()
         {
@@ -48,16 +58,18 @@ namespace HAAC_Recorder_SL
 
             // THE FEATURE. This is the whole mechanism behind Audio Recorder
             // Pro's "Enable recording under screen lock" checkbox, and it has
-            // no equivalent in a Windows Phone 8.1 Store/WinRT app — which is
-            // why the app is being moved to Silverlight in the first place.
+            // no equivalent in a Windows Phone 8.1 Store/WinRT app - which is
+            // why the app moved to Silverlight in the first place.
             //
             // Set here, in the constructor, so it is in force before MainPage
-            // ever loads and well before a recording can be started.
-            SetRunUnderLockScreen();
+            // loads and well before a recording can start.
+            if (AppSettings.LoadRunUnderLockScreen())
+            {
+                SetRunUnderLockScreen();
+            }
 
             if (Debugger.IsAttached)
             {
-                // Display the current frame rate counters.
                 Application.Current.Host.Settings.EnableFrameRateCounter = true;
 
                 // NOTE: the stock VS2013 template sets
@@ -66,16 +78,14 @@ namespace HAAC_Recorder_SL
                 //         = IdleDetectionMode.Disabled;
                 //
                 // right here, "to prevent the screen from turning off while
-                // under the debugger". That line has been deliberately
-                // removed.
+                // under the debugger". That line is deliberately absent.
                 //
                 // UserIdleDetectionMode and ApplicationIdleDetectionMode are
                 // different things. UserIdleDetectionMode.Disabled stops the
-                // phone from locking at all — which would mean the screen
-                // never locks, the app is never obscured, and this test would
-                // report a glowing success without having exercised the
-                // feature even once. The screen must be allowed to lock
-                // normally for any of this to mean anything.
+                // phone locking at all, which would mask exactly the behaviour
+                // this app depends on getting right - and on a four-hour take
+                // a display that never sleeps is also the largest avoidable
+                // battery drain there is.
             }
         }
 
@@ -86,13 +96,15 @@ namespace HAAC_Recorder_SL
         ///
         /// 1. It is one-way. Setting it to Disabled is permitted at any point,
         ///    but setting it back to Enabled in the same session throws
-        ///    InvalidOperationException. That is why the real app's checkbox
-        ///    has to be a persisted preference applied once at launch, with
-        ///    "off" taking effect on the next run — not a live toggle.
+        ///    InvalidOperationException. That is why the Settings checkbox is
+        ///    a persisted preference applied once at launch, with "off" taking
+        ///    effect on the next run - not a live toggle.
         ///
         /// 2. It does not make the app immortal. An incoming phone call, a
         ///    depleted battery, or the user launching something else still
         ///    deactivates it. It covers exactly one case: the screen locking.
+        ///    That case is the common one for a recorder, which is why it is
+        ///    worth the whole port.
         /// </summary>
         private static void SetRunUnderLockScreen()
         {
@@ -114,39 +126,26 @@ namespace HAAC_Recorder_SL
         {
         }
 
-        // Code to execute when the application is launching (eg, from Start).
         private void Application_Launching(object sender, LaunchingEventArgs e)
         {
-            ProbeLog.Append("APP LAUNCHING");
         }
 
-        // Code to execute when the application is activated (brought to foreground).
         private void Application_Activated(object sender, ActivatedEventArgs e)
         {
-            ProbeLog.Append("APP ACTIVATED  (IsApplicationInstancePreserved=" +
-                            e.IsApplicationInstancePreserved + ")");
         }
 
         /// <summary>
-        /// If this fires while a test recording is running, the test has
-        /// FAILED: the app was pushed to the background, which is exactly what
-        /// disabling idle detection is supposed to prevent when the cause is
-        /// the screen locking.
-        ///
-        /// Note that Silverlight's Deactivated has no deferral mechanism — the
-        /// app gets roughly ten seconds and nothing here can be awaited
-        /// reliably. That constraint matters for the real port (finalizing a
-        /// WAV on the way out), but for the probe all that's needed is a
-        /// marker in the log.
+        /// MainPage subscribes to PhoneApplicationService.Current.Deactivated
+        /// separately and does the real work there - finalizing the WAV with a
+        /// blocking stop, since Silverlight gives no deferral and roughly ten
+        /// seconds of wall clock before the process may be gone.
         /// </summary>
         private void Application_Deactivated(object sender, DeactivatedEventArgs e)
         {
-            ProbeLog.Append("APP DEACTIVATED  (Reason=" + e.Reason + ")  <<< recording would end here");
         }
 
         private void Application_Closing(object sender, ClosingEventArgs e)
         {
-            ProbeLog.Append("APP CLOSING");
         }
 
         private void RootFrame_NavigationFailed(object sender, NavigationFailedEventArgs e)
@@ -159,16 +158,6 @@ namespace HAAC_Recorder_SL
 
         private void Application_UnhandledException(object sender, ApplicationUnhandledExceptionEventArgs e)
         {
-            // Logged before breaking, so a crash during an unattended run
-            // still leaves a trace on disk.
-            try
-            {
-                ProbeLog.Append("UNHANDLED EXCEPTION: " + e.ExceptionObject.Message);
-            }
-            catch
-            {
-            }
-
             if (Debugger.IsAttached)
             {
                 Debugger.Break();

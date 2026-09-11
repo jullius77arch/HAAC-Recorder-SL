@@ -10,8 +10,23 @@
     FontFamily="{StaticResource PhoneFontFamilyNormal}"
     FontSize="{StaticResource PhoneFontSizeNormal}"
     Foreground="{StaticResource PhoneForegroundBrush}"
-    SupportedOrientations="Portrait" Orientation="Portrait"
+    SupportedOrientations="PortraitOrLandscape" Orientation="Portrait"
     shell:SystemTray.IsVisible="True">
+
+    <!-- Ported from the WinRT build's MainPage.xaml. The structure and the
+         three rules behind it are unchanged:
+
+           1. Nothing may terminate the process while recording.
+           2. Nothing the app does may be audible - no sounds, and no system
+              dialogs, since a MessageDialog is silent on most firmware but
+              not guaranteed to be on all of it. Confirmation is a plain
+              in-app overlay instead.
+           3. No single tap may end a recording.
+
+         The differences from the WinRT XAML are mechanical: PhoneApplicationPage
+         instead of Page, SupportedOrientations instead of an AutoRotationPreferences
+         call, StaticResource instead of ThemeResource, and the Phone* theme
+         resource names. -->
 
     <Grid x:Name="LayoutRoot" Background="Transparent">
         <Grid.RowDefinitions>
@@ -19,60 +34,205 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <StackPanel x:Name="TitlePanel" Grid.Row="0" Margin="16,17,16,12">
-            <TextBlock Text="LOCK SCREEN TEST" Style="{StaticResource PhoneTextNormalStyle}" Margin="0,0"/>
-            <TextBlock Text="HAAC Recorder" Margin="0,-4,0,0" Style="{StaticResource PhoneTextTitle1Style}"/>
-            <!-- Reports whether ApplicationIdleDetectionMode actually took.
-                 If this line is red, nothing below is a valid test. -->
-            <TextBlock x:Name="IdleModeText" FontSize="16" TextWrapping="Wrap" Margin="0,6,0,0"/>
+        <StackPanel x:Name="TitlePanel" Grid.Row="0" Margin="16,17,16,8">
+            <TextBlock Text="HAAC RECORDER" Style="{StaticResource PhoneTextNormalStyle}" Margin="0,0"/>
+            <!-- Says what the *next* recording will use while idle, and what
+                 the current one actually negotiated while running. Those are
+                 different things: a take can land on a fallback mode. -->
+            <TextBlock x:Name="SubtitleText" Text="16bit PCM 48kHz" Margin="0,-2,0,0"
+                       FontSize="20" TextWrapping="Wrap" Opacity="0.85"/>
+            <!-- Red here means ApplicationIdleDetectionMode was refused, and a
+                 take will not survive the screen locking. -->
+            <TextBlock x:Name="LockModeText" FontSize="15" TextWrapping="Wrap" Margin="0,4,0,0"/>
         </StackPanel>
 
         <ScrollViewer Grid.Row="1" Margin="16,0,16,0">
             <StackPanel>
 
-                <Button x:Name="StartButton" Content="Start test recording"
-                        Click="StartButton_Click" Height="86" FontSize="24"
+                <TextBlock x:Name="StatusText" Text="Ready." FontSize="26" TextWrapping="Wrap"
+                           Margin="0,4,0,2"/>
+                <TextBlock x:Name="FreeSpaceText" FontSize="17" TextWrapping="Wrap" Opacity="0.8"
+                           Margin="0,0,0,12"/>
+
+                <Button x:Name="StartButton" Content="Start recording"
+                        Click="StartButton_Click" Height="90" FontSize="24"
                         HorizontalAlignment="Stretch" Margin="0,0,0,8"/>
-                <Button x:Name="StopButton" Content="Stop and save"
-                        Click="StopButton_Click" IsEnabled="False" Height="86" FontSize="24"
+                <Button x:Name="StopButton" Content="Stop"
+                        Click="StopButton_Click" IsEnabled="False" Height="90" FontSize="24"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,8"/>
+                <Button x:Name="LockButton" Content="Lock screen"
+                        Click="LockButton_Click" IsEnabled="False" Height="74" FontSize="20"
                         HorizontalAlignment="Stretch" Margin="0,0,0,16"/>
 
-                <TextBlock x:Name="ElapsedText" Text="00:00:00" FontSize="40" FontFamily="Segoe WP Semibold"
-                           HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                <TextBlock x:Name="StatusText" Text="Idle." FontSize="18" TextWrapping="Wrap"
-                           Margin="0,0,0,6"/>
-                <TextBlock x:Name="ObscuredText" FontSize="16" TextWrapping="Wrap" Opacity="0.8"
-                           Margin="0,0,0,6"/>
-                <TextBlock x:Name="ResultText" FontSize="18" TextWrapping="Wrap"
-                           Foreground="#FFFFB900" Margin="0,0,0,16"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="SettingsButton" Grid.Column="0" Content="Settings"
+                            Click="SettingsButton_Click" FontSize="18" Margin="0,0,4,0"/>
+                    <Button x:Name="InfoButton" Grid.Column="1" Content="About"
+                            Click="InfoButton_Click" FontSize="18" Margin="4,0,0,0"/>
+                </Grid>
 
-                <!-- Instructions live on the page rather than in a readme,
-                     because the whole test happens away from the PC. -->
-                <TextBlock Text="How to run this" FontSize="20" FontWeight="Bold" Margin="0,0,0,6"/>
-                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
-                           Text="1. Unplug from USB. Under the debugger the OS behaves differently, and a cable also keeps the phone charging, which can mask power-related deactivation."/>
-                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
-                           Text="2. Turn on Airplane Mode, so an incoming call can't end the take and confuse the result."/>
-                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
-                           Text="3. Tap Start, then press the physical Power button to lock the phone. Leave it locked for at least 10 minutes with some sound in the room."/>
-                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
-                           Text="4. Wake the phone and unlock. If this app is still on screen and still counting, that is the result you want."/>
-                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,16"
-                           Text="5. Tap Stop and save, then check the reported audio length against the wall clock."/>
-
-                <Button x:Name="ExportLogButton" Content="Export log to Music\recordings"
-                        Click="ExportLogButton_Click" FontSize="16"
-                        HorizontalAlignment="Stretch" Margin="0,0,0,6"/>
-                <Button x:Name="ClearLogButton" Content="Clear log"
-                        Click="ClearLogButton_Click" FontSize="16"
-                        HorizontalAlignment="Stretch" Margin="0,0,0,16"/>
-
-                <TextBlock Text="Recent log" FontSize="20" FontWeight="Bold" Margin="0,0,0,6"/>
-                <TextBlock x:Name="LogTailText" FontSize="13" TextWrapping="Wrap"
-                           FontFamily="Courier New" Opacity="0.8" Margin="0,0,0,40"/>
-
+                <!-- Written to only by the health check and the failure paths,
+                     so an empty line here means nothing has gone wrong. -->
+                <TextBlock x:Name="WarningText" Margin="0,10,0,0" Foreground="#FFFFB900"
+                           FontSize="18" TextWrapping="Wrap"/>
+                <TextBlock x:Name="FileInfoText" Margin="0,16,0,24"
+                           FontSize="17" TextWrapping="Wrap" Opacity="0.8"/>
             </StackPanel>
         </ScrollViewer>
+
+        <!-- Full-screen "locked" overlay. Spans both rows so it blocks taps on
+             Start/Stop/Lock while showing. Black rather than dimmed: on the
+             AMOLED panels these phones use, black pixels cost almost no power,
+             which matters across a four-hour take.
+
+             Note this is a tap guard, not a power feature. Unlike the WinRT
+             build, this app *wants* the phone to lock - with idle detection
+             disabled the take carries on regardless, and letting the display
+             sleep is the single largest battery saving available. -->
+        <Grid x:Name="LockOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <StackPanel VerticalAlignment="Center" Margin="40,0,40,0">
+                <TextBlock Text="Recording - screen locked" Foreground="White" FontSize="26"
+                           HorizontalAlignment="Center" Margin="0,0,0,20" TextWrapping="Wrap"/>
+                <TextBlock x:Name="LockElapsedText" Foreground="White" FontSize="22"
+                           HorizontalAlignment="Center" Margin="0,0,0,50"/>
+                <TextBlock Text="Slide to unlock" Foreground="Gray" FontSize="18"
+                           HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                <Slider x:Name="UnlockSlider" Minimum="0" Maximum="100"
+                        ValueChanged="UnlockSlider_ValueChanged"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Stop confirmation. The layout is the accident guard: "Keep
+             recording" is large and sits where the Stop button was, so a
+             double-tap lands there. The destructive button is small, at the
+             far bottom of the screen, and stays disabled for the first 1.2
+             seconds the overlay is up. -->
+        <Grid x:Name="StopConfirmOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" VerticalAlignment="Center" Margin="30,0,30,0">
+                <TextBlock Text="Stop recording?" Foreground="White" FontSize="30" FontWeight="Bold"
+                           HorizontalAlignment="Center" Margin="0,0,0,12" TextWrapping="Wrap"/>
+                <TextBlock Text="The take is still running. Nothing has been lost."
+                           Foreground="Gray" FontSize="16" TextWrapping="Wrap"
+                           HorizontalAlignment="Center" Margin="0,0,0,40"/>
+                <Button x:Name="KeepRecordingButton" Content="Keep recording"
+                        Click="KeepRecordingButton_Click"
+                        HorizontalAlignment="Stretch" Height="90" FontSize="24"/>
+            </StackPanel>
+
+            <StackPanel Grid.Row="1" Margin="30,0,30,40">
+                <TextBlock Text="Ends the take and writes the file to Music\recordings."
+                           Foreground="Gray" FontSize="14" TextWrapping="Wrap"
+                           HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                <Button x:Name="ConfirmStopButton" Content="Stop and save"
+                        Click="ConfirmStopButton_Click" IsEnabled="False"
+                        HorizontalAlignment="Center" Width="220" FontSize="18"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- First-run / re-detect screen. Detection doesn't start until the
+             user taps the button: verification needs actual sound in the room
+             to tell a real channel apart from a duplicated one, so seizing the
+             microphone unannounced tends to produce a wrong answer as well as
+             a rude one. -->
+        <Grid x:Name="SetupOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <ScrollViewer Margin="30,40,30,30">
+                <StackPanel>
+                    <TextBlock Text="Check what this phone can do" Foreground="White" FontSize="28"
+                               TextWrapping="Wrap" Margin="0,0,0,16"/>
+                    <TextBlock x:Name="SetupStatusText" Foreground="Gray" FontSize="17" TextWrapping="Wrap"
+                               Text="The app records a fraction of a second on each microphone and reads it back, to find out which ones really deliver independent channels. It takes a few seconds."
+                               Margin="0,0,0,16"/>
+                    <TextBlock Foreground="#FFFFB900" FontSize="16" TextWrapping="Wrap"
+                               Text="Make some noise while this runs - talk, or play music. In a silent room every channel records digital zero, which is indistinguishable from a duplicate, and good microphones get rejected."
+                               Margin="0,0,0,24"/>
+                    <TextBlock x:Name="SetupProgressText" Foreground="White" FontSize="18"
+                               TextWrapping="Wrap" Margin="0,0,0,20"/>
+                    <Button x:Name="SetupDetectButton" Content="Run detection"
+                            Click="SetupDetectButton_Click" HorizontalAlignment="Stretch"
+                            Height="86" FontSize="22" Margin="0,0,0,8"/>
+                    <Button x:Name="SetupSkipButton" Content="Skip for now"
+                            Click="SetupSkipButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Settings. Lists every mode this phone accepted when its microphone
+             was probed, best first. Picking one overrides the automatic choice
+             until "Use best available" is tapped or the app is relaunched. -->
+        <Grid x:Name="SettingsOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <ScrollViewer Margin="30,40,30,30">
+                <StackPanel>
+                    <TextBlock Text="Settings" Foreground="White" FontSize="30" Margin="0,0,0,20"/>
+
+                    <TextBlock Text="Recording mode" Foreground="White" FontSize="20" Margin="0,0,0,6"/>
+                    <ComboBox x:Name="ModeComboBox" SelectionChanged="ModeComboBox_SelectionChanged"
+                              Margin="0,0,0,6"/>
+                    <TextBlock x:Name="ModeDeviceText" Foreground="Gray" FontSize="15"
+                               TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock x:Name="SettingsHintText" Foreground="Gray" FontSize="15"
+                               TextWrapping="Wrap" Margin="0,0,0,16"/>
+                    <Button x:Name="UseBestButton" Content="Use best available"
+                            Click="UseBestButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18" Margin="0,0,0,8"/>
+                    <Button x:Name="RedetectButton" Content="Run detection again"
+                            Click="RedetectButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18" Margin="0,0,0,24"/>
+
+                    <CheckBox x:Name="AutoLockCheckBox" Content="Lock the screen when a take starts"
+                              Foreground="White" FontSize="18" Margin="0,0,0,4"
+                              Checked="AutoLockCheckBox_Changed" Unchecked="AutoLockCheckBox_Changed"/>
+                    <TextBlock Foreground="Gray" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,20"
+                               Text="Puts the black tap guard up immediately, so the phone can go straight into a pocket."/>
+
+                    <CheckBox x:Name="RunUnderLockCheckBox" Content="Keep recording under the lock screen"
+                              Foreground="White" FontSize="18" Margin="0,0,0,4"
+                              Checked="RunUnderLockCheckBox_Changed" Unchecked="RunUnderLockCheckBox_Changed"/>
+                    <TextBlock x:Name="RunUnderLockHintText" Foreground="Gray" FontSize="14"
+                               TextWrapping="Wrap" Margin="0,0,0,24"/>
+
+                    <Button x:Name="SettingsCloseButton" Content="Close"
+                            Click="SettingsCloseButton_Click" HorizontalAlignment="Stretch"
+                            Height="80" FontSize="20"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Grid x:Name="InfoOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <ScrollViewer Margin="30,40,30,30">
+                <StackPanel>
+                    <TextBlock Text="About" Foreground="White" FontSize="30" Margin="0,0,0,16"/>
+                    <TextBlock Foreground="Gray" FontSize="17" TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="Records raw, unprocessed 16-bit PCM at 48 kHz from the high-amplitude (HAAC) microphones on Nokia Lumia handsets, straight to a WAV file in Music\recordings."/>
+                    <TextBlock Foreground="Gray" FontSize="17" TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="For long takes: turn on Airplane Mode so a call can't interrupt, and connect a charger. A take that reaches the 4 GB WAV limit continues automatically in a new file ending -pt2."/>
+                    <TextBlock x:Name="InfoDiagnosticsText" Foreground="Gray" FontSize="15"
+                               TextWrapping="Wrap" Margin="0,0,0,20"/>
+                    <Button x:Name="InfoCloseButton" Content="Close"
+                            Click="InfoCloseButton_Click" HorizontalAlignment="Stretch"
+                            Height="80" FontSize="20"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Grid x:Name="SplashOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="HAAC Recorder" Foreground="White" FontSize="34"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="16bit PCM 48kHz" Foreground="Gray" FontSize="18"
+                           HorizontalAlignment="Center" Margin="0,6,0,0"/>
+            </StackPanel>
+        </Grid>
+
     </Grid>
 
 </phone:PhoneApplicationPage>
