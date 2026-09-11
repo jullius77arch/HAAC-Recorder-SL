@@ -1,0 +1,78 @@
+<phone:PhoneApplicationPage
+    x:Class="HAAC_Recorder_SL.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:phone="clr-namespace:Microsoft.Phone.Controls;assembly=Microsoft.Phone"
+    xmlns:shell="clr-namespace:Microsoft.Phone.Shell;assembly=Microsoft.Phone"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    FontFamily="{StaticResource PhoneFontFamilyNormal}"
+    FontSize="{StaticResource PhoneFontSizeNormal}"
+    Foreground="{StaticResource PhoneForegroundBrush}"
+    SupportedOrientations="Portrait" Orientation="Portrait"
+    shell:SystemTray.IsVisible="True">
+
+    <Grid x:Name="LayoutRoot" Background="Transparent">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel x:Name="TitlePanel" Grid.Row="0" Margin="16,17,16,12">
+            <TextBlock Text="LOCK SCREEN TEST" Style="{StaticResource PhoneTextNormalStyle}" Margin="0,0"/>
+            <TextBlock Text="HAAC Recorder" Margin="0,-4,0,0" Style="{StaticResource PhoneTextTitle1Style}"/>
+            <!-- Reports whether ApplicationIdleDetectionMode actually took.
+                 If this line is red, nothing below is a valid test. -->
+            <TextBlock x:Name="IdleModeText" FontSize="16" TextWrapping="Wrap" Margin="0,6,0,0"/>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" Margin="16,0,16,0">
+            <StackPanel>
+
+                <Button x:Name="StartButton" Content="Start test recording"
+                        Click="StartButton_Click" Height="86" FontSize="24"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,8"/>
+                <Button x:Name="StopButton" Content="Stop and save"
+                        Click="StopButton_Click" IsEnabled="False" Height="86" FontSize="24"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,16"/>
+
+                <TextBlock x:Name="ElapsedText" Text="00:00:00" FontSize="40" FontFamily="Segoe WP Semibold"
+                           HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                <TextBlock x:Name="StatusText" Text="Idle." FontSize="18" TextWrapping="Wrap"
+                           Margin="0,0,0,6"/>
+                <TextBlock x:Name="ObscuredText" FontSize="16" TextWrapping="Wrap" Opacity="0.8"
+                           Margin="0,0,0,6"/>
+                <TextBlock x:Name="ResultText" FontSize="18" TextWrapping="Wrap"
+                           Foreground="#FFFFB900" Margin="0,0,0,16"/>
+
+                <!-- Instructions live on the page rather than in a readme,
+                     because the whole test happens away from the PC. -->
+                <TextBlock Text="How to run this" FontSize="20" FontWeight="Bold" Margin="0,0,0,6"/>
+                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
+                           Text="1. Unplug from USB. Under the debugger the OS behaves differently, and a cable also keeps the phone charging, which can mask power-related deactivation."/>
+                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
+                           Text="2. Turn on Airplane Mode, so an incoming call can't end the take and confuse the result."/>
+                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
+                           Text="3. Tap Start, then press the physical Power button to lock the phone. Leave it locked for at least 10 minutes with some sound in the room."/>
+                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,4"
+                           Text="4. Wake the phone and unlock. If this app is still on screen and still counting, that is the result you want."/>
+                <TextBlock FontSize="15" TextWrapping="Wrap" Opacity="0.85" Margin="0,0,0,16"
+                           Text="5. Tap Stop and save, then check the reported audio length against the wall clock."/>
+
+                <Button x:Name="ExportLogButton" Content="Export log to Music\recordings"
+                        Click="ExportLogButton_Click" FontSize="16"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,6"/>
+                <Button x:Name="ClearLogButton" Content="Clear log"
+                        Click="ClearLogButton_Click" FontSize="16"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,16"/>
+
+                <TextBlock Text="Recent log" FontSize="20" FontWeight="Bold" Margin="0,0,0,6"/>
+                <TextBlock x:Name="LogTailText" FontSize="13" TextWrapping="Wrap"
+                           FontFamily="Courier New" Opacity="0.8" Margin="0,0,0,40"/>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+
+</phone:PhoneApplicationPage>
