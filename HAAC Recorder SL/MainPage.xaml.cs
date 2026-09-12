@@ -205,10 +205,16 @@ namespace HAAC_Recorder_SL
                 WarningText.MaxHeight = 60;
                 FileInfoText.MaxHeight = 76;
 
-                // Stack comes to 306px of the roughly 418 the column has, so
-                // the gaps can afford to be generous and there is still room
-                // left if a label ever wraps to two lines.
-                SetButtonMetrics(64, 60, 20, 18);
+                // Stack comes to 346px of the roughly 418 the column has.
+                //
+                // The heights are not free choices. The phone's Button
+                // template puts a 12px touch-target overhang on every side of
+                // the content, plus 10,3,10,5 padding and the stroke, so a
+                // fixed Height of H leaves roughly H-38 for the text. At 64
+                // and font 20 that is 26px against the ~27 the glyphs need,
+                // and the descenders on "Start recording" were being clipped
+                // flat by the bottom border on both handsets.
+                SetButtonMetrics(76, 68, 20, 18);
                 StartButton.Margin = new Thickness(0, 0, 0, 18);
                 StopButton.Margin = new Thickness(0, 0, 0, 26);
 
@@ -243,7 +249,10 @@ namespace HAAC_Recorder_SL
                 WarningText.MaxHeight = 88;
                 FileInfoText.MaxHeight = 110;
 
-                SetButtonMetrics(90, 64, 24, 18);
+                // 68 rather than 64 on the secondary pair: 64 cleared the
+                // descenders by under two pixels, which is not a margin worth
+                // relying on across firmware revisions.
+                SetButtonMetrics(90, 68, 24, 18);
                 StartButton.Margin = new Thickness(0, 0, 0, 12);
                 StopButton.Margin = new Thickness(0, 0, 0, 20);
 
