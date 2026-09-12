@@ -2,14 +2,30 @@
 
 <Deployment xmlns="http://schemas.microsoft.com/windowsphone/2014/deployment" AppPlatformVersion="8.1">
   <DefaultLanguage xmlns="" code="en-US"/>
-  <App xmlns="" ProductID="{2d517c02-e2d9-4873-a160-efa031f9e696}" Title="HAAC_Recorder_SL" RuntimeType="Silverlight" Version="1.0.0.0" Genre="apps.normal"  Author="HAAC_Recorder_SL author" Description="Sample description" SDOptOut ="false" BackUpOptOut ="false" Publisher="HAAC_Recorder_SL" PublisherID="{8f557300-ee8a-49cb-b7e7-b3ec8c68501a}">
+  <App xmlns="" ProductID="{2d517c02-e2d9-4873-a160-efa031f9e696}" Title="HAAC Recorder" RuntimeType="Silverlight" Version="1.0.0.0" Genre="apps.normal"  Author="HAAC Recorder" Description="Raw 16-bit PCM recorder for Lumia HAAC microphones" SDOptOut ="false" BackUpOptOut ="false" Publisher="HAAC Recorder" PublisherID="{8f557300-ee8a-49cb-b7e7-b3ec8c68501a}">
     <IconPath IsRelative="true" IsResource="false">Assets\ApplicationIcon.png</IconPath>
     <Capabilities>
-      <Capability Name="ID_CAP_NETWORKING"/>
+      <!-- Not present in the stock template, and without it
+           MediaCapture.InitializeAsync fails outright. -->
+      <Capability Name="ID_CAP_MICROPHONE"/>
+
+      <!-- Needed for KnownFolders.MusicLibrary, where recordings and the
+           mode-detection logs are written so they can be pulled off over
+           USB. -->
       <Capability Name="ID_CAP_MEDIALIB_AUDIO"/>
       <Capability Name="ID_CAP_MEDIALIB_PLAYBACK"/>
-      <Capability Name="ID_CAP_SENSORS"/>
-      <Capability Name="ID_CAP_WEBBROWSERCOMPONENT"/>
+
+      <!-- ID_CAP_NETWORKING, ID_CAP_SENSORS and ID_CAP_WEBBROWSERCOMPONENT
+           were in the template and have been removed: this app never touches
+           the network, a sensor or a web control, and each capability left in
+           is one more line on the install prompt for no benefit.
+
+           Worth knowing for later: ID_CAP_VOIP plus the Communications audio
+           device role is the documented route to capturing audio in the
+           background. It is NOT what this app uses, and it is not the same
+           mechanism as ApplicationIdleDetectionMode - it also forces
+           voice-call-style processing, which is the opposite of what a raw
+           PCM recorder wants. -->
     </Capabilities>
     <Tasks>
       <DefaultTask Name ="_default" NavigationPage="MainPage.xaml" ActivationPolicy="Resume"/>
@@ -20,7 +36,7 @@
           <SmallImageURI IsRelative="true" IsResource="false">Assets\Tiles\FlipCycleTileSmall.png</SmallImageURI>
           <Count>0</Count>
           <BackgroundImageURI IsRelative="true" IsResource="false">Assets\Tiles\FlipCycleTileMedium.png</BackgroundImageURI>
-          <Title>HAAC_Recorder_SL</Title>
+          <Title>HAAC Recorder</Title>
           <BackContent></BackContent>
           <BackBackgroundImageURI></BackBackgroundImageURI>
           <BackTitle></BackTitle>
