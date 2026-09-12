@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
@@ -23,7 +23,6 @@ namespace HAAC_Recorder_SL
         // chances to leave the audio endpoint in a bad state, and the answer
         // never changes for a given handset.
         private const string ModeCacheKey = "HaacRecorder.ModeCache";
-        private const string AutoLockKey = "HaacRecorder.AutoLockOnStart";
         private const string RunUnderLockKey = "HaacRecorder.RunUnderLockScreen";
 
         /// <summary>
@@ -172,21 +171,6 @@ namespace HAAC_Recorder_SL
         #endregion
 
         #region Simple preferences
-
-        /// <summary>
-        /// Show the black tap-guard overlay as soon as a take starts, so the
-        /// phone can go straight into a pocket with no live buttons on
-        /// screen.
-        /// </summary>
-        public static bool LoadAutoLockOnStart()
-        {
-            return LoadBool(AutoLockKey, false);
-        }
-
-        public static void SaveAutoLockOnStart(bool value)
-        {
-            SaveBool(AutoLockKey, value);
-        }
 
         /// <summary>
         /// Whether to disable ApplicationIdleDetectionMode at launch, which

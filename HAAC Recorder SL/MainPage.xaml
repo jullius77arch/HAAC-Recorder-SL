@@ -1,4 +1,4 @@
-<phone:PhoneApplicationPage
+﻿<phone:PhoneApplicationPage
     x:Class="HAAC_Recorder_SL.MainPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -46,63 +46,90 @@
             <TextBlock x:Name="LockModeText" FontSize="15" TextWrapping="Wrap" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <ScrollViewer Grid.Row="1" Margin="16,0,16,0">
-            <StackPanel>
+        <!-- No ScrollViewer. Everything a take needs has to be reachable
+             without scrolling, in both orientations, so the content is three
+             named panels that OnOrientationChanged repositions:
 
+               portrait  - head / buttons / tail stacked in one column
+               landscape - head and tail in the left column, buttons in the
+                           right one, because the short landscape height
+                           cannot take four stacked buttons plus text.
+
+             ApplyOrientationLayout only ever sets Grid.Row, Grid.Column,
+             Grid.ColumnSpan, Margin, Height and FontSize. It never touches
+             the engine or the recording file, so rotating mid-take is
+             harmless. -->
+        <Grid x:Name="ContentGrid" Grid.Row="1" Margin="16,0,16,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel x:Name="HeadPanel" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2">
                 <TextBlock x:Name="StatusText" Text="Ready." FontSize="26" TextWrapping="Wrap"
                            Margin="0,4,0,2"/>
                 <TextBlock x:Name="FreeSpaceText" FontSize="17" TextWrapping="Wrap" Opacity="0.8"
                            Margin="0,0,0,12"/>
+            </StackPanel>
+
+            <!-- Start and Stop keep the full width of whichever column the
+                 panel is in: they are the two controls that get used under
+                 pressure. Settings and About share the row below at reduced
+                 height, which reads as a separate group rather than a third
+                 and fourth item in the same stack. -->
+            <Grid x:Name="ButtonPanel" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                  VerticalAlignment="Top">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <!-- Four rows because landscape stacks Settings and About
+                     instead of sitting them side by side: in that orientation
+                     the panel is only half the screen wide, and splitting it
+                     again leaves each label with about a quarter of the
+                     display to fit in. -->
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
                 <Button x:Name="StartButton" Content="Start recording"
                         Click="StartButton_Click" Height="90" FontSize="24"
-                        HorizontalAlignment="Stretch" Margin="0,0,0,8"/>
+                        Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,12"/>
                 <Button x:Name="StopButton" Content="Stop"
                         Click="StopButton_Click" IsEnabled="False" Height="90" FontSize="24"
-                        HorizontalAlignment="Stretch" Margin="0,0,0,8"/>
-                <Button x:Name="LockButton" Content="Lock screen"
-                        Click="LockButton_Click" IsEnabled="False" Height="74" FontSize="20"
-                        HorizontalAlignment="Stretch" Margin="0,0,0,16"/>
+                        Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,20"/>
+                <Button x:Name="SettingsButton" Content="Settings"
+                        Click="SettingsButton_Click" Height="64" FontSize="18"
+                        Grid.Row="2" Grid.Column="0"
+                        HorizontalAlignment="Stretch" Margin="0,0,4,0"/>
+                <Button x:Name="InfoButton" Content="About"
+                        Click="InfoButton_Click" Height="64" FontSize="18"
+                        Grid.Row="2" Grid.Column="1"
+                        HorizontalAlignment="Stretch" Margin="4,0,0,0"/>
+            </Grid>
 
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="SettingsButton" Grid.Column="0" Content="Settings"
-                            Click="SettingsButton_Click" FontSize="18" Margin="0,0,4,0"/>
-                    <Button x:Name="InfoButton" Grid.Column="1" Content="About"
-                            Click="InfoButton_Click" FontSize="18" Margin="4,0,0,0"/>
-                </Grid>
-
-                <!-- Written to only by the health check and the failure paths,
-                     so an empty line here means nothing has gone wrong. -->
-                <TextBlock x:Name="WarningText" Margin="0,10,0,0" Foreground="#FFFFB900"
-                           FontSize="18" TextWrapping="Wrap"/>
-                <TextBlock x:Name="FileInfoText" Margin="0,16,0,24"
-                           FontSize="17" TextWrapping="Wrap" Opacity="0.8"/>
-            </StackPanel>
-        </ScrollViewer>
-
-        <!-- Full-screen "locked" overlay. Spans both rows so it blocks taps on
-             Start/Stop/Lock while showing. Black rather than dimmed: on the
-             AMOLED panels these phones use, black pixels cost almost no power,
-             which matters across a four-hour take.
-
-             Note this is a tap guard, not a power feature. Unlike the WinRT
-             build, this app *wants* the phone to lock - with idle detection
-             disabled the take carries on regardless, and letting the display
-             sleep is the single largest battery saving available. -->
-        <Grid x:Name="LockOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
-            <StackPanel VerticalAlignment="Center" Margin="40,0,40,0">
-                <TextBlock Text="Recording - screen locked" Foreground="White" FontSize="26"
-                           HorizontalAlignment="Center" Margin="0,0,0,20" TextWrapping="Wrap"/>
-                <TextBlock x:Name="LockElapsedText" Foreground="White" FontSize="22"
-                           HorizontalAlignment="Center" Margin="0,0,0,50"/>
-                <TextBlock Text="Slide to unlock" Foreground="Gray" FontSize="18"
-                           HorizontalAlignment="Center" Margin="0,0,0,10"/>
-                <Slider x:Name="UnlockSlider" Minimum="0" Maximum="100"
-                        ValueChanged="UnlockSlider_ValueChanged"/>
+            <!-- WarningText is written to only by the health check and the
+                 failure paths, so an empty line here means nothing has gone
+                 wrong. Both of these are capped and ellipsised: with the
+                 ScrollViewer gone, an unusually long message must not be
+                 able to push anything off the bottom of the screen. -->
+            <StackPanel x:Name="TailPanel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2">
+                <TextBlock x:Name="WarningText" Margin="0,16,0,0" Foreground="#FFFFB900"
+                           FontSize="18" TextWrapping="Wrap"
+                           MaxHeight="88" TextTrimming="WordEllipsis"/>
+                <TextBlock x:Name="FileInfoText" Margin="0,14,0,12"
+                           FontSize="17" TextWrapping="Wrap" Opacity="0.8"
+                           MaxHeight="110" TextTrimming="WordEllipsis"/>
             </StackPanel>
         </Grid>
 
@@ -175,8 +202,25 @@
                     <TextBlock Text="Settings" Foreground="White" FontSize="30" Margin="0,0,0,20"/>
 
                     <TextBlock Text="Recording mode" Foreground="White" FontSize="20" Margin="0,0,0,6"/>
-                    <ComboBox x:Name="ModeComboBox" SelectionChanged="ModeComboBox_SelectionChanged"
-                              Margin="0,0,0,6"/>
+                    <!-- A hand-built dropdown rather than a ComboBox. WP's
+                         ComboBox abandons its inline popup above five items
+                         and opens a full-screen picker page instead, and a
+                         Lumia routinely detects more modes than that. This
+                         one behaves the same at any count.
+
+                         Opening it pushes the rest of Settings down rather
+                         than floating over it: a Popup inside a ScrollViewer
+                         has to be repositioned by hand on every scroll, and
+                         getting that wrong puts the list somewhere off
+                         screen. -->
+                    <Button x:Name="ModePickerButton" Click="ModePickerButton_Click"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            FontSize="18" Margin="0,0,0,6"/>
+                    <Border x:Name="ModePickerList" Visibility="Collapsed"
+                            BorderBrush="Gray" BorderThickness="1" Margin="0,0,0,6">
+                        <ListBox x:Name="ModeListBox" SelectionChanged="ModeListBox_SelectionChanged"
+                                 MaxHeight="260" FontSize="18" Margin="4"/>
+                    </Border>
                     <TextBlock x:Name="ModeDeviceText" Foreground="Gray" FontSize="15"
                                TextWrapping="Wrap" Margin="0,0,0,8"/>
                     <TextBlock x:Name="SettingsHintText" Foreground="Gray" FontSize="15"
@@ -187,12 +231,6 @@
                     <Button x:Name="RedetectButton" Content="Run detection again"
                             Click="RedetectButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18" Margin="0,0,0,24"/>
-
-                    <CheckBox x:Name="AutoLockCheckBox" Content="Lock the screen when a take starts"
-                              Foreground="White" FontSize="18" Margin="0,0,0,4"
-                              Checked="AutoLockCheckBox_Changed" Unchecked="AutoLockCheckBox_Changed"/>
-                    <TextBlock Foreground="Gray" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,20"
-                               Text="Puts the black tap guard up immediately, so the phone can go straight into a pocket."/>
 
                     <CheckBox x:Name="RunUnderLockCheckBox" Content="Keep recording under the lock screen"
                               Foreground="White" FontSize="18" Margin="0,0,0,4"
@@ -224,8 +262,43 @@
             </ScrollViewer>
         </Grid>
 
-        <Grid x:Name="SplashOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+        <!-- Visible in markup, not switched on in code. The page used to
+             render once with this collapsed before MainPage_Loaded ran,
+             which is what produced the flash of the recording screen before
+             the splash. Code only ever hides it now. -->
+        <Grid x:Name="SplashOverlay" Grid.RowSpan="2" Background="Black" Visibility="Visible">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+
+                <!-- Four shapes, no bitmap: it stays sharp on WVGA, WXGA and
+                     720p alike, and costs nothing to ship. The cradle is an
+                     ellipse outline clipped to everything below y=40 in its
+                     own coordinates, which leaves the arms running up either
+                     side of the head. The WinRT build clipped at the ellipse's
+                     midpoint, which is why its cradle was only ever a half
+                     circle. -->
+                <Grid Width="120" Height="150" Margin="0,0,0,28">
+                    <Rectangle Width="36" Height="72" RadiusX="18" RadiusY="18"
+                               Fill="{StaticResource PhoneAccentBrush}"
+                               VerticalAlignment="Top" HorizontalAlignment="Center"
+                               Margin="0,8,0,0"/>
+                    <Ellipse Width="72" Height="64" StrokeThickness="8"
+                             Stroke="{StaticResource PhoneAccentBrush}"
+                             VerticalAlignment="Top" HorizontalAlignment="Center"
+                             Margin="0,28,0,0">
+                        <Ellipse.Clip>
+                            <RectangleGeometry Rect="0,12,72,52"/>
+                        </Ellipse.Clip>
+                    </Ellipse>
+                    <Rectangle Width="6" Height="36"
+                               Fill="{StaticResource PhoneAccentBrush}"
+                               VerticalAlignment="Top" HorizontalAlignment="Center"
+                               Margin="0,88,0,0"/>
+                    <Rectangle Width="54" Height="8" RadiusX="4" RadiusY="4"
+                               Fill="{StaticResource PhoneAccentBrush}"
+                               VerticalAlignment="Top" HorizontalAlignment="Center"
+                               Margin="0,124,0,0"/>
+                </Grid>
+
                 <TextBlock Text="HAAC Recorder" Foreground="White" FontSize="34"
                            HorizontalAlignment="Center"/>
                 <TextBlock Text="16bit PCM 48kHz" Foreground="Gray" FontSize="18"

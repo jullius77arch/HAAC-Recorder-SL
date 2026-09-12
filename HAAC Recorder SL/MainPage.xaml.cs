@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading.Tasks;
@@ -81,11 +81,9 @@ namespace HAAC_Recorder_SL
         // is being used automatically.
         private CaptureAttempt _selectedMode;
 
-        // Guards ModeComboBox_SelectionChanged while the list is being filled
+        // Guards ModeListBox_SelectionChanged while the list is being filled
         // in code, so populating it doesn't register as a user pick.
         private bool _suppressModeSelectionChanged;
-
-        private bool _autoLockOnStart;
 
         private DispatcherTimer _elapsedTimer;
         private DispatcherTimer _healthTimer;
@@ -106,7 +104,6 @@ namespace HAAC_Recorder_SL
         {
             InitializeComponent();
 
-            _autoLockOnStart = AppSettings.LoadAutoLockOnStart();
             _engine.Failed += Engine_Failed;
 
             Loaded += MainPage_Loaded;
@@ -122,6 +119,7 @@ namespace HAAC_Recorder_SL
             try
             {
                 ShowSplash();
+                ApplyOrientationLayout(Orientation);
                 ReportLockModeState();
                 HookLifecycle();
 
@@ -142,6 +140,166 @@ namespace HAAC_Recorder_SL
                 RestoreIdleButtons();
             }
         }
+
+        #endregion
+
+        #region Orientation
+
+        protected override void OnOrientationChanged(OrientationChangedEventArgs e)
+        {
+            base.OnOrientationChanged(e);
+
+            try
+            {
+                ApplyOrientationLayout(e.Orientation);
+            }
+            catch
+            {
+                // A layout failure must never be allowed to reach the top of
+                // the stack and terminate the process mid-take. A slightly
+                // wrong layout is survivable; a lost recording is not.
+            }
+        }
+
+        /// <summary>
+        /// Portrait stacks the three panels in a single column. Landscape
+        /// moves the buttons into the right-hand column, because roughly 480
+        /// pixels of height will not take two large buttons, a secondary row
+        /// and the status text stacked, and having to scroll to reach Stop
+        /// mid-take is exactly what this layout exists to prevent.
+        ///
+        /// This method only ever sets layout properties - Grid.Row,
+        /// Grid.Column, Grid.ColumnSpan, Grid.RowSpan, Margin, Height and
+        /// FontSize. It never touches the engine, the recording file or any
+        /// timer, so rotating the phone during a take changes nothing about
+        /// the take itself.
+        /// </summary>
+        private void ApplyOrientationLayout(PageOrientation orientation)
+        {
+            var isLandscape =
+                (orientation & PageOrientation.Landscape) == PageOrientation.Landscape;
+
+            if (isLandscape)
+            {
+                // Tighten the header: every pixel it gives up is a pixel the
+                // two columns below get to keep.
+                TitlePanel.Margin = new Thickness(16, 8, 16, 4);
+                SubtitleText.FontSize = 17;
+                LockModeText.FontSize = 13;
+
+                // Head and tail keep the left column. The buttons take the
+                // right one and span all three rows, so the column's height
+                // is theirs regardless of how much text is on the left.
+                SetCell(HeadPanel, 0, 0, 1);
+                SetCell(TailPanel, 1, 0, 1);
+                SetCell(ButtonPanel, 0, 1, 1);
+                Grid.SetRowSpan(ButtonPanel, 3);
+                ButtonPanel.Margin = new Thickness(12, 0, 0, 0);
+
+                StatusText.FontSize = 22;
+                FreeSpaceText.FontSize = 15;
+                WarningText.FontSize = 15;
+                FileInfoText.FontSize = 15;
+
+                // Tighter caps than portrait: there is less height to give.
+                WarningText.MaxHeight = 60;
+                FileInfoText.MaxHeight = 76;
+
+                // Stack comes to 306px of the roughly 418 the column has, so
+                // the gaps can afford to be generous and there is still room
+                // left if a label ever wraps to two lines.
+                SetButtonMetrics(64, 60, 20, 18);
+                StartButton.Margin = new Thickness(0, 0, 0, 18);
+                StopButton.Margin = new Thickness(0, 0, 0, 26);
+
+                // Stacked, full width of the column. Side by side they get a
+                // quarter of the screen each and the labels squash.
+                SetCell(SettingsButton, 2, 0, 2);
+                SetCell(InfoButton, 3, 0, 2);
+                SettingsButton.Margin = new Thickness(0, 0, 0, 14);
+                InfoButton.Margin = new Thickness(0, 0, 0, 0);
+
+                // The tray costs about 32 pixels of width in landscape, which
+                // is worth more here than the clock is. Portrait keeps it.
+                SetSystemTrayVisible(false);
+            }
+            else
+            {
+                TitlePanel.Margin = new Thickness(16, 17, 16, 8);
+                SubtitleText.FontSize = 20;
+                LockModeText.FontSize = 15;
+
+                SetCell(HeadPanel, 0, 0, 2);
+                SetCell(ButtonPanel, 1, 0, 2);
+                SetCell(TailPanel, 2, 0, 2);
+                Grid.SetRowSpan(ButtonPanel, 1);
+                ButtonPanel.Margin = new Thickness(0, 0, 0, 0);
+
+                StatusText.FontSize = 26;
+                FreeSpaceText.FontSize = 17;
+                WarningText.FontSize = 18;
+                FileInfoText.FontSize = 17;
+
+                WarningText.MaxHeight = 88;
+                FileInfoText.MaxHeight = 110;
+
+                SetButtonMetrics(90, 64, 24, 18);
+                StartButton.Margin = new Thickness(0, 0, 0, 12);
+                StopButton.Margin = new Thickness(0, 0, 0, 20);
+
+                // Side by side across the full width, which is wide enough
+                // here for both labels.
+                SetCell(SettingsButton, 2, 0, 1);
+                SetCell(InfoButton, 2, 1, 1);
+                SettingsButton.Margin = new Thickness(0, 0, 4, 0);
+                InfoButton.Margin = new Thickness(4, 0, 0, 0);
+
+                SetSystemTrayVisible(true);
+            }
+        }
+
+        private static void SetCell(FrameworkElement element, int row, int column, int columnSpan)
+        {
+            Grid.SetRow(element, row);
+            Grid.SetColumn(element, column);
+            Grid.SetColumnSpan(element, columnSpan);
+        }
+
+        /// <summary>
+        /// Start and Stop share one height and font size, Settings and About a
+        /// smaller pair - their labels are secondary and should not compete
+        /// with the two controls that matter during a take.
+        /// </summary>
+        private void SetButtonMetrics(
+            double primaryHeight, double secondaryHeight,
+            double primaryFontSize, double secondaryFontSize)
+        {
+            StartButton.Height = primaryHeight;
+            StopButton.Height = primaryHeight;
+            StartButton.FontSize = primaryFontSize;
+            StopButton.FontSize = primaryFontSize;
+
+            SettingsButton.Height = secondaryHeight;
+            InfoButton.Height = secondaryHeight;
+            SettingsButton.FontSize = secondaryFontSize;
+            InfoButton.FontSize = secondaryFontSize;
+        }
+
+        private void SetSystemTrayVisible(bool visible)
+        {
+            try
+            {
+                SystemTray.SetIsVisible(this, visible);
+            }
+            catch
+            {
+                // Cosmetic only - never worth failing a layout pass over.
+            }
+        }
+
+        #endregion
+
+        #region Startup (continued)
 
         /// <summary>
         /// If disabling idle detection was refused, a take will not survive
@@ -360,7 +518,6 @@ namespace HAAC_Recorder_SL
             _wavLimitWarned = false;
 
             StopButton.IsEnabled = true;
-            LockButton.IsEnabled = true;
 
             // Report what was actually negotiated, not what was requested.
             SubtitleText.Text = string.Format(
@@ -371,11 +528,6 @@ namespace HAAC_Recorder_SL
             StartHealthTimer();
 
             await RunHealthCheckAsync();
-
-            if (_autoLockOnStart)
-            {
-                ShowLockOverlay();
-            }
         }
 
         #endregion
@@ -529,14 +681,12 @@ namespace HAAC_Recorder_SL
         {
             StopElapsedTimer();
             StopHealthTimer();
-            HideLockOverlay();
         }
 
         private void RestoreIdleButtons()
         {
             StartButton.IsEnabled = !_detectionRunning;
             StopButton.IsEnabled = false;
-            LockButton.IsEnabled = false;
             SettingsButton.IsEnabled = !_detectionRunning;
             InfoButton.IsEnabled = !_detectionRunning;
         }
@@ -765,9 +915,19 @@ namespace HAAC_Recorder_SL
                 (int)elapsed.TotalHours, elapsed.Minutes, elapsed.Seconds);
 
             StatusText.Text = text;
-            LockElapsedText.Text = text;
         }
 
+        /// <summary>
+        /// Starts the countdown that hides the splash. It does not show it:
+        /// the overlay is Visible in markup so that it is already on screen
+        /// for the very first frame, which is what stops the recording screen
+        /// flashing up before it. The only exception is a re-entry into this
+        /// page with the overlay already hidden, which is why the visibility
+        /// is still set here.
+        ///
+        /// One second rather than two. Now that it is genuinely the first
+        /// thing on screen after the OS splash, two reads as a stall.
+        /// </summary>
         private void ShowSplash()
         {
             SplashOverlay.Visibility = Visibility.Visible;
@@ -777,7 +937,7 @@ namespace HAAC_Recorder_SL
             // one can hide the splash for a newer session early.
             if (_splashTimer == null)
             {
-                _splashTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                _splashTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 _splashTimer.Tick += SplashTimer_Tick;
             }
 
@@ -789,81 +949,6 @@ namespace HAAC_Recorder_SL
         {
             _splashTimer.Stop();
             SplashOverlay.Visibility = Visibility.Collapsed;
-        }
-
-        #endregion
-
-        #region Lock overlay
-
-        private void LockButton_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                ShowLockOverlay();
-            }
-            catch (Exception ex)
-            {
-                WarningText.Text = "Couldn't show the lock guard: " + ex.Message;
-            }
-        }
-
-        /// <summary>
-        /// A tap guard, not a power feature. Nothing here stops the phone from
-        /// locking - with idle detection disabled the take continues either
-        /// way, and letting the screen sleep is the point.
-        /// </summary>
-        private void ShowLockOverlay()
-        {
-            UnlockSlider.Value = 0;
-            LockOverlay.Visibility = Visibility.Visible;
-            UpdateRecordingElapsedText();
-
-            try
-            {
-                // Silverlight's equivalent of hiding the WinRT StatusBar.
-                // Cosmetic only - never worth failing the lock over.
-                SystemTray.SetIsVisible(this, false);
-            }
-            catch
-            {
-            }
-        }
-
-        private void HideLockOverlay()
-        {
-            if (LockOverlay.Visibility != Visibility.Visible)
-            {
-                return;
-            }
-
-            LockOverlay.Visibility = Visibility.Collapsed;
-            UnlockSlider.Value = 0;
-
-            try
-            {
-                SystemTray.SetIsVisible(this, true);
-            }
-            catch
-            {
-            }
-        }
-
-        // Silverlight's Slider raises RoutedPropertyChangedEventArgs<double>
-        // rather than WinRT's RangeBaseValueChangedEventArgs.
-        private void UnlockSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            try
-            {
-                if (e.NewValue < 95)
-                {
-                    return;
-                }
-
-                HideLockOverlay();
-            }
-            catch
-            {
-            }
         }
 
         #endregion
@@ -963,21 +1048,12 @@ namespace HAAC_Recorder_SL
         /// Back closes whatever overlay is open, and is otherwise swallowed
         /// for the whole recording - a stray tap should never be able to exit
         /// or navigate away mid-take. (Start and Search can't be suppressed
-        /// this way, which is what the lock guard is for.)
+        /// this way; the phone's own lock screen is what covers that case now.)
         ///
         /// Replaces the WinRT build's HardwareButtons.BackPressed hook.
         /// </summary>
         protected override void OnBackKeyPress(CancelEventArgs e)
         {
-            if (LockOverlay.Visibility == Visibility.Visible)
-            {
-                // Deliberately not an unlock. The guard exists precisely so a
-                // pocketed phone can't end a take, and Back is the easiest
-                // accidental press there is.
-                e.Cancel = true;
-                return;
-            }
-
             if (StopConfirmOverlay.Visibility == Visibility.Visible)
             {
                 StopStopArmTimer();
@@ -988,6 +1064,15 @@ namespace HAAC_Recorder_SL
 
             if (SettingsOverlay.Visibility == Visibility.Visible)
             {
+                // Back closes the open dropdown first, then the overlay, so a
+                // press never skips a level.
+                if (ModePickerList.Visibility == Visibility.Visible)
+                {
+                    CloseModePicker();
+                    e.Cancel = true;
+                    return;
+                }
+
                 SettingsOverlay.Visibility = Visibility.Collapsed;
                 e.Cancel = true;
                 return;
@@ -1116,38 +1201,39 @@ namespace HAAC_Recorder_SL
         {
             // Re-sync in case the effective mode changed since the overlay was
             // last open.
-            PopulateModeComboBox();
+            CloseModePicker();
+            PopulateModePicker();
             UpdateModeDeviceText();
             UpdateSettingsHintText();
 
-            AutoLockCheckBox.IsChecked = _autoLockOnStart;
             RunUnderLockCheckBox.IsChecked = AppSettings.LoadRunUnderLockScreen();
             UpdateRunUnderLockHint();
 
             RedetectButton.IsEnabled = !_engine.IsRecording;
             UseBestButton.IsEnabled = !_engine.IsRecording && _selectedMode != null;
-            ModeComboBox.IsEnabled = !_engine.IsRecording && _availableModes.Count > 1;
+            ModePickerButton.IsEnabled = !_engine.IsRecording && _availableModes.Count > 1;
 
             SettingsOverlay.Visibility = Visibility.Visible;
         }
 
         private void SettingsCloseButton_Click(object sender, RoutedEventArgs e)
         {
+            CloseModePicker();
             SettingsOverlay.Visibility = Visibility.Collapsed;
         }
 
-        private void PopulateModeComboBox()
+        private void PopulateModePicker()
         {
             _suppressModeSelectionChanged = true;
 
             try
             {
-                ModeComboBox.Items.Clear();
+                ModeListBox.Items.Clear();
 
                 var labels = ModeRanking.BuildModeLabels(_availableModes);
                 foreach (var label in labels)
                 {
-                    ModeComboBox.Items.Add(label);
+                    ModeListBox.Items.Add(label);
                 }
 
                 var effective = EffectiveMode;
@@ -1156,7 +1242,7 @@ namespace HAAC_Recorder_SL
                     var index = _availableModes.IndexOf(effective);
                     if (index >= 0)
                     {
-                        ModeComboBox.SelectedIndex = index;
+                        ModeListBox.SelectedIndex = index;
                     }
                 }
             }
@@ -1164,9 +1250,43 @@ namespace HAAC_Recorder_SL
             {
                 _suppressModeSelectionChanged = false;
             }
+
+            UpdateModePickerButtonText();
         }
 
-        private async void ModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        /// <summary>
+        /// The closed dropdown has to say what is currently selected, since
+        /// there is no other place on this screen that does.
+        /// </summary>
+        private void UpdateModePickerButtonText()
+        {
+            var selected = ModeListBox.SelectedItem as string;
+
+            ModePickerButton.Content = string.IsNullOrEmpty(selected)
+                ? "No verified modes"
+                : selected + "   \u25BC";
+        }
+
+        private void ModePickerButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                ModePickerList.Visibility =
+                    ModePickerList.Visibility == Visibility.Visible
+                        ? Visibility.Collapsed
+                        : Visibility.Visible;
+            }
+            catch
+            {
+            }
+        }
+
+        private void CloseModePicker()
+        {
+            ModePickerList.Visibility = Visibility.Collapsed;
+        }
+
+        private async void ModeListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             try
             {
@@ -1175,7 +1295,7 @@ namespace HAAC_Recorder_SL
                     return;
                 }
 
-                var index = ModeComboBox.SelectedIndex;
+                var index = ModeListBox.SelectedIndex;
                 if (index < 0 || index >= _availableModes.Count)
                 {
                     return;
@@ -1185,6 +1305,11 @@ namespace HAAC_Recorder_SL
                 // the one that was already top of the list - the display says
                 // "manual" either way, which matches what they just did.
                 _selectedMode = _availableModes[index];
+
+                // A pick is the end of the interaction, so the list closes
+                // itself and the button takes over showing the choice.
+                CloseModePicker();
+                UpdateModePickerButtonText();
 
                 ApplyEffectiveMode();
                 UpdateModeDeviceText();
@@ -1206,7 +1331,7 @@ namespace HAAC_Recorder_SL
             {
                 _selectedMode = null;
 
-                PopulateModeComboBox();
+                PopulateModePicker();
                 ApplyEffectiveMode();
                 UpdateModeDeviceText();
                 UpdateSettingsHintText();
@@ -1270,18 +1395,6 @@ namespace HAAC_Recorder_SL
             RunUnderLockHintText.Text = App.RunningUnderLockScreenEnabled
                 ? "On. Takes effect at launch, so switching this off applies the next time the app starts."
                 : "Off for this session. Takes effect the next time the app starts.";
-        }
-
-        private void AutoLockCheckBox_Changed(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                _autoLockOnStart = AutoLockCheckBox.IsChecked == true;
-                AppSettings.SaveAutoLockOnStart(_autoLockOnStart);
-            }
-            catch
-            {
-            }
         }
 
         private void RunUnderLockCheckBox_Changed(object sender, RoutedEventArgs e)
