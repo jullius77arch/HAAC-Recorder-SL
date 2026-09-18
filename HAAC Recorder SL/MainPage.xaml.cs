@@ -1402,6 +1402,14 @@ namespace HAAC_Recorder_SL
 
             var summary = new List<string>();
 
+            // Every endpoint's full report, accumulated into one file rather
+            // than one file per endpoint: the whole point of the run is
+            // comparing the endpoints against each other, and that is far
+            // easier when they are side by side in a single document.
+            var fullReport = new List<string>();
+            fullReport.Add("Speaker probe spike - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            fullReport.Add("");
+
             try
             {
                 var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
@@ -1409,6 +1417,7 @@ namespace HAAC_Recorder_SL
                 if (devices.Count == 0)
                 {
                     summary.Add("No capture endpoints reported.");
+                    fullReport.Add("No capture endpoints reported.");
                 }
 
                 foreach (var device in devices)
@@ -1419,6 +1428,10 @@ namespace HAAC_Recorder_SL
 
                     System.Diagnostics.Debug.WriteLine("### " + device.Name);
                     System.Diagnostics.Debug.WriteLine(report);
+
+                    fullReport.Add("################ " + device.Name + " ################");
+                    fullReport.AddRange(report.Split('\n'));
+                    fullReport.Add("");
 
                     summary.Add(device.Name + ": " + ExtractVerdict(report));
 
@@ -1432,6 +1445,7 @@ namespace HAAC_Recorder_SL
             catch (Exception ex)
             {
                 summary.Add("Spike failed: " + ex.Message);
+                fullReport.Add("Spike failed: " + ex.Message);
             }
             finally
             {
@@ -1439,7 +1453,12 @@ namespace HAAC_Recorder_SL
                 SettingsCloseButton.IsEnabled = true;
             }
 
-            summary.Add("Full report in the debug output and the probe log.");
+            var fileName = await SpeakerProbeSpike.WriteReportFileAsync(fullReport);
+
+            summary.Add(fileName == null
+                ? "Could not write the report file. Full report is in the debug output."
+                : "Full report: Music\\recordings\\" + fileName);
+
             SpeakerSpikeText.Text = string.Join("\n", summary.ToArray());
         }
 

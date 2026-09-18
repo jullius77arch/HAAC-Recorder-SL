@@ -706,6 +706,39 @@ namespace HAAC_Recorder_SL
             }
         }
 
+        /// <summary>
+        /// Writes the collected reports to a timestamped text file in
+        /// Music\recordings, the same place and the same way the detection
+        /// log goes, and returns the file name.
+        ///
+        /// ProbeLog alone is not enough for this. It writes to isolated
+        /// storage, which survives a crash - the property that matters for
+        /// the lock-screen test it was built for - but which needs a desktop
+        /// tool to read back. A spike report is something you want to read on
+        /// a PC five minutes after running it, so it goes somewhere USB can
+        /// see.
+        ///
+        /// Returns null if the write failed. The caller decides whether that
+        /// is worth mentioning; it is never worth throwing over.
+        /// </summary>
+        public static async Task<string> WriteReportFileAsync(List<string> lines)
+        {
+            try
+            {
+                var folder = await AppSettings.GetRecordingsFolderAsync();
+                var name = "speaker-spike-" + DateTime.Now.ToString("yyyy-MM-dd-HHmmss") + ".txt";
+
+                var file = await folder.CreateFileAsync(name, CreationCollisionOption.GenerateUniqueName);
+                await FileIO.WriteLinesAsync(file, lines);
+
+                return file.Name;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static string Finish(List<string> report)
         {
             var text = string.Join(Environment.NewLine, report.ToArray());
