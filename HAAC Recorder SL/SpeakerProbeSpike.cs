@@ -296,15 +296,178 @@ namespace HAAC_Recorder_SL
             }
         }
 
+        private static int _pumpTicks;
+
         private static void PumpTick(object sender, EventArgs e)
         {
             try
             {
                 FrameworkDispatcher.Update();
+                _pumpTicks++;
             }
             catch
             {
             }
+        }
+
+        /// <summary>
+        /// Plays the tone with NO capture running, and reports what the
+        /// playback stack says about itself while it does.
+        ///
+        /// This exists because "I heard a pop but no tone" has two completely
+        /// different causes and they need different fixes:
+        ///
+        ///   - If the tone IS audible here but not during a capture, then
+        ///     playback works and the capture session is suppressing it.
+        ///     That is a real result and the answer to the spike's question.
+        ///
+        ///   - If the tone is NOT audible here either, the XNA plumbing never
+        ///     worked, every measurement taken so far is meaningless, and the
+        ///     playback half needs rewriting against MediaElement instead.
+        ///
+        /// The pump tick count is the specific thing to look at. XNA audio in
+        /// a Silverlight app plays nothing at all unless
+        /// FrameworkDispatcher.Update is called regularly, and it reports no
+        /// error when it isn't - it just stays silent. A tick count near zero
+        /// means that is what happened.
+        /// </summary>
+        public static async Task<string> PlayToneOnlyAsync(int toneHz, int durationMs)
+        {
+            if (toneHz <= 0)
+            {
+                toneHz = DefaultToneHz;
+            }
+
+            if (durationMs <= 0)
+            {
+                durationMs = 3000;
+            }
+
+            var report = new List<string>();
+            report.Add("=== Tone only, no capture ===");
+            report.Add(string.Format("Tone {0} Hz for {1}ms at volume {2:0.00}",
+                toneHz, durationMs, PlaybackVolume));
+
+            DispatcherTimer pump = null;
+            SoundEffectInstance instance = null;
+
+            try
+            {
+                _pumpTicks = 0;
+
+                FrameworkDispatcher.Update();
+
+                pump = new DispatcherTimer();
+                pump.Interval = TimeSpan.FromMilliseconds(33);
+                pump.Tick += PumpTick;
+                pump.Start();
+
+                byte[] pcm = BuildToneBuffer(toneHz, ToneBufferMs);
+
+                report.Add(string.Format(
+                    "Tone buffer: {0} bytes, {1} samples, peak sample {2}",
+                    pcm.Length, pcm.Length / BytesPerSample, PeakSample(pcm)));
+
+                var effect = new SoundEffect(pcm, SampleRateHz, AudioChannels.Mono);
+
+                report.Add(string.Format(
+                    "SoundEffect created, reported duration {0:0}ms",
+                    effect.Duration.TotalMilliseconds));
+
+                instance = effect.CreateInstance();
+                instance.IsLooped = true;
+                instance.Volume = PlaybackVolume;
+
+                instance.Play();
+
+                report.Add(string.Format("State immediately after Play(): {0}", instance.State));
+
+                // Sampled rather than just checked at the end: an instance
+                // that is stopped by audio policy tends to be stopped almost
+                // at once, and that looks very different from one that plays
+                // for a while and then gets pre-empted.
+                int elapsed = 0;
+                while (elapsed < durationMs)
+                {
+                    await Task.Delay(500);
+                    elapsed += 500;
+
+                    report.Add(string.Format("  {0,5}ms  state={1}  pumpTicks={2}",
+                        elapsed, instance.State, _pumpTicks));
+                }
+
+                instance.Stop();
+
+                report.Add("");
+                report.Add(string.Format("Pump ticked {0} times in {1}ms.", _pumpTicks, durationMs));
+
+                if (_pumpTicks < (durationMs / 100))
+                {
+                    report.Add("The pump barely ran. XNA audio needs FrameworkDispatcher.Update");
+                    report.Add("called regularly and plays nothing, silently, when it isn't.");
+                    report.Add("This is almost certainly why there is no tone.");
+                }
+                else
+                {
+                    report.Add("The pump ran normally, so FrameworkDispatcher is not the problem.");
+                    report.Add("If you heard nothing, XNA playback itself is not reaching the");
+                    report.Add("loudspeaker on this device and the MediaElement route is next.");
+                }
+            }
+            catch (Exception ex)
+            {
+                report.Add("FAILED: " + ex.Message);
+            }
+            finally
+            {
+                if (pump != null)
+                {
+                    try
+                    {
+                        pump.Stop();
+                        pump.Tick -= PumpTick;
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (instance != null)
+                {
+                    try
+                    {
+                        instance.Dispose();
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            return Finish(report);
+        }
+
+        /// <summary>
+        /// The largest absolute sample in a 16-bit PCM buffer. Proves the
+        /// generated tone is not silence before any conclusion is drawn about
+        /// why it cannot be heard.
+        /// </summary>
+        private static int PeakSample(byte[] pcm)
+        {
+            int peak = 0;
+
+            for (int i = 0; i + 1 < pcm.Length; i += 2)
+            {
+                var sample = (short)(pcm[i] | (pcm[i + 1] << 8));
+                int magnitude = sample == short.MinValue ? short.MaxValue : Math.Abs(sample);
+
+                if (magnitude > peak)
+                {
+                    peak = magnitude;
+                }
+            }
+
+            return peak;
         }
 
         #region Tone generation

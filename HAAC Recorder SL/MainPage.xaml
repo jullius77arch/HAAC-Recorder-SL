@@ -242,6 +242,9 @@
                          loudspeaker, which is exactly the thing rule 2 of
                          this page's layout says must never happen by
                          accident near a take. -->
+                    <Button x:Name="ToneOnlyButton" Content="Tone only - no capture"
+                            Click="ToneOnlyButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18" Margin="0,0,0,6"/>
                     <Button x:Name="SpeakerSpikeButton" Content="Speaker probe (spike)"
                             Click="SpeakerSpikeButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18" Margin="0,0,0,6"/>

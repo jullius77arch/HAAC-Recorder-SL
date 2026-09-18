@@ -1225,6 +1225,7 @@ namespace HAAC_Recorder_SL
 
             // TEMPORARY - see SpeakerSpikeButton_Click.
             SpeakerSpikeButton.IsEnabled = !_engine.IsRecording;
+            ToneOnlyButton.IsEnabled = !_engine.IsRecording;
 
             SettingsOverlay.Visibility = Visibility.Visible;
         }
@@ -1373,6 +1374,52 @@ namespace HAAC_Recorder_SL
                 _detectionRunning = false;
                 RestoreIdleButtons();
             }
+        }
+
+        /// <summary>
+        /// TEMPORARY. Plays the probe tone with no capture running, to split
+        /// "playback is broken" from "capture suppresses playback". Run this
+        /// first when the spike produces no audible tone - until it is known
+        /// which of those two is happening, nothing the spike measures means
+        /// anything.
+        /// </summary>
+        private async void ToneOnlyButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_engine.IsRecording)
+            {
+                return;
+            }
+
+            ToneOnlyButton.IsEnabled = false;
+            SpeakerSpikeButton.IsEnabled = false;
+            SpeakerSpikeText.Text = "Playing a 1500 Hz tone for 3 seconds. Listen.";
+
+            string report;
+
+            try
+            {
+                report = await SpeakerProbeSpike.PlayToneOnlyAsync(0, 3000);
+            }
+            catch (Exception ex)
+            {
+                report = "Tone test failed: " + ex.Message;
+            }
+            finally
+            {
+                ToneOnlyButton.IsEnabled = true;
+                SpeakerSpikeButton.IsEnabled = true;
+            }
+
+            System.Diagnostics.Debug.WriteLine(report);
+
+            var lines = new List<string>(report.Split('\n'));
+            var fileName = await SpeakerProbeSpike.WriteReportFileAsync(lines);
+
+            // Deliberately shows the whole report rather than a summary. It
+            // is short, and the pump tick count in it is the single most
+            // useful number available right now.
+            SpeakerSpikeText.Text = report
+                + (fileName == null ? "" : "\n\nSaved: Music\\recordings\\" + fileName);
         }
 
         /// <summary>
