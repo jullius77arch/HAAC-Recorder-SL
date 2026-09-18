@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Phone.Controls;
 using Microsoft.Phone.Shell;
+using Windows.Devices.Enumeration;
 using Windows.Phone.Devices.Power;
 using Windows.Storage;
 
@@ -1222,6 +1223,9 @@ namespace HAAC_Recorder_SL
             UseBestButton.IsEnabled = !_engine.IsRecording && _selectedMode != null;
             ModePickerButton.IsEnabled = !_engine.IsRecording && _availableModes.Count > 1;
 
+            // TEMPORARY - see SpeakerSpikeButton_Click.
+            SpeakerSpikeButton.IsEnabled = !_engine.IsRecording;
+
             SettingsOverlay.Visibility = Visibility.Visible;
         }
 
@@ -1369,6 +1373,111 @@ namespace HAAC_Recorder_SL
                 _detectionRunning = false;
                 RestoreIdleButtons();
             }
+        }
+
+        /// <summary>
+        /// TEMPORARY. Runs the speaker-probe feasibility spike against every
+        /// capture endpoint the phone reports and shows a one-line verdict
+        /// per endpoint. Remove this handler, the two controls in Settings
+        /// and SpeakerProbeSpike.cs once the question is answered.
+        ///
+        /// The full report goes to the debug output and to ProbeLog. Only the
+        /// verdict lines are shown on screen - the report is thirty-odd lines
+        /// and there is nowhere sensible to put it on a phone.
+        ///
+        /// Runs at 2 channels. The question at this stage is whether playback
+        /// and capture coexist at all, and stereo is the likeliest mode to
+        /// work; 4-channel is worth trying only once that answer is yes.
+        /// </summary>
+        private async void SpeakerSpikeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_engine.IsRecording)
+            {
+                return;
+            }
+
+            SpeakerSpikeButton.IsEnabled = false;
+            SettingsCloseButton.IsEnabled = false;
+            SpeakerSpikeText.Text = "Running. Keep the room quiet.";
+
+            var summary = new List<string>();
+
+            try
+            {
+                var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
+
+                if (devices.Count == 0)
+                {
+                    summary.Add("No capture endpoints reported.");
+                }
+
+                foreach (var device in devices)
+                {
+                    SpeakerSpikeText.Text = "Testing " + device.Name + "...";
+
+                    var report = await SpeakerProbeSpike.RunAsync(device.Id, 2, 0);
+
+                    System.Diagnostics.Debug.WriteLine("### " + device.Name);
+                    System.Diagnostics.Debug.WriteLine(report);
+
+                    summary.Add(device.Name + ": " + ExtractVerdict(report));
+
+                    // Same pause the detector uses between probes. Some Lumia
+                    // drivers don't release the capture endpoint immediately,
+                    // and this runs several init/start/stop/dispose cycles
+                    // back to back.
+                    await Task.Delay(400);
+                }
+            }
+            catch (Exception ex)
+            {
+                summary.Add("Spike failed: " + ex.Message);
+            }
+            finally
+            {
+                SpeakerSpikeButton.IsEnabled = true;
+                SettingsCloseButton.IsEnabled = true;
+            }
+
+            summary.Add("Full report in the debug output and the probe log.");
+            SpeakerSpikeText.Text = string.Join("\n", summary.ToArray());
+        }
+
+        /// <summary>
+        /// The one line worth showing from a spike report. Falls back to
+        /// something honest rather than an empty string when the report
+        /// failed before it reached a verdict.
+        /// </summary>
+        private static string ExtractVerdict(string report)
+        {
+            if (string.IsNullOrEmpty(report))
+            {
+                return "no report";
+            }
+
+            var lines = report.Split('\n');
+
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+
+                if (trimmed.StartsWith("VERDICT:"))
+                {
+                    return trimmed.Substring("VERDICT:".Length).Trim();
+                }
+            }
+
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+
+                if (trimmed.StartsWith("FAILED:"))
+                {
+                    return trimmed;
+                }
+            }
+
+            return "no verdict reached";
         }
 
         private void UpdateModeDeviceText()

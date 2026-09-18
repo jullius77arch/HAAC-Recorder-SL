@@ -230,7 +230,24 @@
                             FontSize="18" Margin="0,0,0,8"/>
                     <Button x:Name="RedetectButton" Content="Run detection again"
                             Click="RedetectButton_Click" HorizontalAlignment="Stretch"
-                            FontSize="18" Margin="0,0,0,24"/>
+                            FontSize="18" Margin="0,0,0,8"/>
+
+                    <!-- TEMPORARY. Feasibility spike for the speaker-probe
+                         idea, not a shipping feature - remove this button,
+                         the TextBlock below it and SpeakerProbeSpike.cs once
+                         it has answered its question.
+
+                         It lives in Settings rather than on the main screen
+                         deliberately: it plays a loud tone out of the
+                         loudspeaker, which is exactly the thing rule 2 of
+                         this page's layout says must never happen by
+                         accident near a take. -->
+                    <Button x:Name="SpeakerSpikeButton" Content="Speaker probe (spike)"
+                            Click="SpeakerSpikeButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18" Margin="0,0,0,6"/>
+                    <TextBlock x:Name="SpeakerSpikeText" Foreground="Gray" FontSize="14"
+                               TextWrapping="Wrap" Margin="0,0,0,24"
+                               Text="Plays a tone through the speaker while recording, to find out whether the phone captures its own output. Quiet room, phone flat on a table, volume up."/>
 
                     <CheckBox x:Name="RunUnderLockCheckBox" Content="Keep recording under the lock screen"
                               Foreground="White" FontSize="18" Margin="0,0,0,4"
