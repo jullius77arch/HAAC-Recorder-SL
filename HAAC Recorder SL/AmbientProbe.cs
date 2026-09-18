@@ -94,6 +94,56 @@ namespace HAAC_Recorder_SL
 
         public const int DefaultSeconds = 20;
 
+        // The capture belonging to a run that is currently in flight, so
+        // deactivation can tear it down.
+        //
+        // This exists because the probe holds a MediaCapture that
+        // MainPage.Service_Deactivated knows nothing about: that handler only
+        // looks at RecordingEngine, and returns immediately when no take is
+        // running. Without this, locking the screen mid-probe (with the
+        // lock-screen preference off) would tombstone the process with the
+        // audio endpoint still held - the exact state the detector's pauses
+        // and dispose-on-failure paths exist to avoid.
+        private static MediaCapture _inFlight;
+
+        /// <summary>
+        /// Stops and releases a probe capture that is still running. Safe to
+        /// call at any time, including when nothing is in flight. Synchronous
+        /// on purpose: the caller is Deactivated, which has no deferral and no
+        /// reliable way to await.
+        /// </summary>
+        public static void AbortQuietly()
+        {
+            var capture = _inFlight;
+            _inFlight = null;
+
+            if (capture == null)
+            {
+                return;
+            }
+
+            try
+            {
+                // Not awaited - there is no time. Disposing is what actually
+                // releases the endpoint, and it follows immediately.
+                capture.StopRecordAsync();
+            }
+            catch
+            {
+            }
+
+            ModeDetector.DisposeQuietly(capture);
+        }
+
+        /// <summary>
+        /// True while a run is in flight, so the UI can refuse to start a
+        /// second one.
+        /// </summary>
+        public static bool IsRunning
+        {
+            get { return _inFlight != null; }
+        }
+
         /// <summary>
         /// Records ambient sound on one endpoint and reports what the channel
         /// relationships say about it. Never throws.
@@ -133,6 +183,8 @@ namespace HAAC_Recorder_SL
 
                     await capture.StartRecordToStorageFileAsync(
                         ModeDetector.CreateProfile(channels), probeFile);
+
+                    _inFlight = capture;
                 }
                 catch (Exception ex)
                 {
@@ -144,9 +196,25 @@ namespace HAAC_Recorder_SL
 
                 await Task.Delay(seconds * 1000);
 
-                await StopQuietlyAsync(capture);
-                ModeDetector.DisposeQuietly(capture);
-                capture = null;
+                // Deactivation may have torn the capture down while this was
+                // waiting. Anything written so far is still on disk and worth
+                // analysing, but stopping a disposed capture is not.
+                if (_inFlight == null)
+                {
+                    report.Add("INTERRUPTED: the capture was torn down mid-run, most likely by");
+                    report.Add("  the screen locking with lock-screen running turned off. The");
+                    report.Add("  partial recording is analysed below for what it is worth.");
+                    report.Add("");
+                    capture = null;
+                }
+                else
+                {
+                    _inFlight = null;
+
+                    await StopQuietlyAsync(capture);
+                    ModeDetector.DisposeQuietly(capture);
+                    capture = null;
+                }
 
                 var started = DateTime.Now;
                 AppendAnalysis(report, await ReadPcmAsync(probeFile), channels);
@@ -164,6 +232,7 @@ namespace HAAC_Recorder_SL
             }
             finally
             {
+                _inFlight = null;
                 ModeDetector.DisposeQuietly(capture);
             }
         }

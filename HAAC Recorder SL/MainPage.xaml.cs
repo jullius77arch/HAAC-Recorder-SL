@@ -1030,6 +1030,12 @@ namespace HAAC_Recorder_SL
         {
             try
             {
+                // The probe holds its own MediaCapture, separate from the
+                // engine's. Releasing it here is what stops a screen lock
+                // mid-probe from tombstoning the process with the audio
+                // endpoint still held.
+                AmbientProbe.AbortQuietly();
+
                 if (!_engine.IsRecording)
                 {
                     return;
@@ -1399,6 +1405,19 @@ namespace HAAC_Recorder_SL
             AmbientProbeButton.IsEnabled = false;
             SettingsCloseButton.IsEnabled = false;
 
+            // Borrows the detection flag, which already blocks the back key
+            // and disables the main buttons. Navigating away mid-probe would
+            // strand a MediaCapture exactly as deactivation would.
+            _detectionRunning = true;
+
+            if (!App.RunningUnderLockScreenEnabled)
+            {
+                AmbientProbeText.Text =
+                    "Note: lock-screen running is off, so letting the screen time out"
+                    + " will cut this short. Keep the screen awake, or turn it on in"
+                    + " Settings and relaunch.";
+            }
+
             var summary = new List<string>();
 
             var fullReport = new List<string>();
@@ -1456,6 +1475,7 @@ namespace HAAC_Recorder_SL
             }
             finally
             {
+                _detectionRunning = false;
                 AmbientProbeButton.IsEnabled = true;
                 SettingsCloseButton.IsEnabled = true;
             }
