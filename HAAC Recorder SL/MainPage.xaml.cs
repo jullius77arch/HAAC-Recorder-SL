@@ -1467,26 +1467,38 @@ namespace HAAC_Recorder_SL
                     fullReport.Add("No capture endpoints reported.");
                 }
 
+                // Both orders, because the platform was observed muting a tone
+                // that starts while a capture is already live. If the
+                // tone-first order survives where the other doesn't, that is
+                // the whole feature rescued; if neither does, the approach is
+                // dead and we stop spending time on it.
+                var orders = new[] { true, false };
+
                 foreach (var device in devices)
                 {
-                    SpeakerSpikeText.Text = "Testing " + device.Name + "...";
+                    foreach (var playFirst in orders)
+                    {
+                        var label = device.Name + (playFirst ? " [tone first]" : " [capture first]");
 
-                    var report = await SpeakerProbeSpike.RunAsync(device.Id, 2, 0);
+                        SpeakerSpikeText.Text = "Testing " + label + "...";
 
-                    System.Diagnostics.Debug.WriteLine("### " + device.Name);
-                    System.Diagnostics.Debug.WriteLine(report);
+                        var report = await SpeakerProbeSpike.RunAsync(device.Id, 2, 0, playFirst);
 
-                    fullReport.Add("################ " + device.Name + " ################");
-                    fullReport.AddRange(report.Split('\n'));
-                    fullReport.Add("");
+                        System.Diagnostics.Debug.WriteLine("### " + label);
+                        System.Diagnostics.Debug.WriteLine(report);
 
-                    summary.Add(device.Name + ": " + ExtractVerdict(report));
+                        fullReport.Add("################ " + label + " ################");
+                        fullReport.AddRange(report.Split('\n'));
+                        fullReport.Add("");
 
-                    // Same pause the detector uses between probes. Some Lumia
-                    // drivers don't release the capture endpoint immediately,
-                    // and this runs several init/start/stop/dispose cycles
-                    // back to back.
-                    await Task.Delay(400);
+                        summary.Add(label + ": " + ExtractVerdict(report));
+
+                        // Same pause the detector uses between probes. Some
+                        // Lumia drivers don't release the capture endpoint
+                        // immediately, and this runs several
+                        // init/start/stop/dispose cycles back to back.
+                        await Task.Delay(400);
+                    }
                 }
             }
             catch (Exception ex)

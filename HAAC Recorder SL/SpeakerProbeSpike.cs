@@ -103,7 +103,8 @@ namespace HAAC_Recorder_SL
         /// Never throws. A spike that crashes the app teaches nothing, so
         /// every failure path returns a report saying what failed and where.
         /// </summary>
-        public static async Task<string> RunAsync(string deviceId, int channels, int toneHz)
+        public static async Task<string> RunAsync(
+            string deviceId, int channels, int toneHz, bool playBeforeCapture)
         {
             if (toneHz <= 0)
             {
@@ -115,6 +116,9 @@ namespace HAAC_Recorder_SL
             report.Add(string.Format("Device Id : {0}", string.IsNullOrEmpty(deviceId) ? "(default)" : deviceId));
             report.Add(string.Format("Channels  : {0}", channels));
             report.Add(string.Format("Tone      : {0} Hz at volume {1:0.00}", toneHz, PlaybackVolume));
+            report.Add(string.Format("Order     : {0}", playBeforeCapture
+                ? "tone started BEFORE capture (tone first, then silence)"
+                : "capture started first (silence, then tone, then silence)"));
             report.Add("");
 
             MediaCapture capture = null;
@@ -164,7 +168,36 @@ namespace HAAC_Recorder_SL
                     return Finish(report);
                 }
 
-                // ---- 2. Start capturing -------------------------------
+                // ---- 2. Optionally get the tone going first -----------
+                //
+                // The reason this order is selectable: WP8.1 was observed
+                // muting XNA playback that STARTS while a capture session is
+                // already live. Audio policy on this platform tends to judge
+                // the newly arriving stream, so a stream that was already
+                // playing when the capture began may survive where a new one
+                // does not. Cheap to test, and it either works or it rules
+                // the approach out for good.
+                bool playThrew = false;
+                string playError = null;
+
+                if (playBeforeCapture)
+                {
+                    try
+                    {
+                        toneInstance.Play();
+                    }
+                    catch (Exception ex)
+                    {
+                        playThrew = true;
+                        playError = ex.Message;
+                    }
+
+                    // Let the tone establish itself before the capture
+                    // session arrives to contest it.
+                    await Task.Delay(300);
+                }
+
+                // ---- 3. Start capturing -------------------------------
                 capture = await TryInitializeAsync(deviceId);
 
                 if (capture == null)
@@ -189,7 +222,7 @@ namespace HAAC_Recorder_SL
                     return Finish(report);
                 }
 
-                // ---- 3. Silence, tone, silence ------------------------
+                // ---- 4. Silence, tone, silence ------------------------
                 //
                 // Every delay here is wall-clock rather than sample-counted,
                 // so the boundaries in the recorded file are approximate -
@@ -198,19 +231,19 @@ namespace HAAC_Recorder_SL
                 // reports every block rather than trying to slice out "the
                 // tone window": the step is found by looking at the numbers,
                 // not by trusting the clock.
-                await Task.Delay(PreSilenceMs);
-
-                bool playThrew = false;
-                string playError = null;
-
-                try
+                if (!playBeforeCapture)
                 {
-                    toneInstance.Play();
-                }
-                catch (Exception ex)
-                {
-                    playThrew = true;
-                    playError = ex.Message;
+                    await Task.Delay(PreSilenceMs);
+
+                    try
+                    {
+                        toneInstance.Play();
+                    }
+                    catch (Exception ex)
+                    {
+                        playThrew = true;
+                        playError = ex.Message;
+                    }
                 }
 
                 if (playThrew)
@@ -242,7 +275,10 @@ namespace HAAC_Recorder_SL
                 {
                 }
 
-                await Task.Delay(PostSilenceMs);
+                // When the tone led, the silent control window has to come
+                // after it instead of before, so the file still contains both
+                // states and the level step is still measurable.
+                await Task.Delay(playBeforeCapture ? PostSilenceMs + PreSilenceMs : PostSilenceMs);
 
                 report.Add(string.Format("SoundEffectInstance.State at end of tone: {0}", stateAtEnd));
                 report.Add("  (Playing = the app believes it played. Stopped/Paused = policy intervened.)");
