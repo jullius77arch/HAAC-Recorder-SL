@@ -232,25 +232,18 @@
                             Click="RedetectButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18" Margin="0,0,0,8"/>
 
-                    <!-- TEMPORARY. Feasibility spike for the speaker-probe
-                         idea, not a shipping feature - remove this button,
-                         the TextBlock below it and SpeakerProbeSpike.cs once
-                         it has answered its question.
-
-                         It lives in Settings rather than on the main screen
-                         deliberately: it plays a loud tone out of the
-                         loudspeaker, which is exactly the thing rule 2 of
-                         this page's layout says must never happen by
-                         accident near a take. -->
-                    <Button x:Name="ToneOnlyButton" Content="Tone only - no capture"
-                            Click="ToneOnlyButton_Click" HorizontalAlignment="Stretch"
+                    <!-- Listens to the room on each endpoint in turn and works
+                         out, from how the channels relate to each other,
+                         whether they are separate microphones or processed
+                         mixes of the same ones. Takes about a minute and
+                         needs nothing from the user but ordinary room
+                         sound. -->
+                    <Button x:Name="AmbientProbeButton" Content="Analyse microphones"
+                            Click="AmbientProbeButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18" Margin="0,0,0,6"/>
-                    <Button x:Name="SpeakerSpikeButton" Content="Speaker probe (spike)"
-                            Click="SpeakerSpikeButton_Click" HorizontalAlignment="Stretch"
-                            FontSize="18" Margin="0,0,0,6"/>
-                    <TextBlock x:Name="SpeakerSpikeText" Foreground="Gray" FontSize="14"
+                    <TextBlock x:Name="AmbientProbeText" Foreground="Gray" FontSize="14"
                                TextWrapping="Wrap" Margin="0,0,0,24"
-                               Text="Plays a tone through the speaker while recording, to find out whether the phone captures its own output. Quiet room, phone flat on a table, volume up."/>
+                               Text="Listens on each microphone endpoint for 20 seconds and reports whether its channels are genuinely separate microphones. Needs ordinary room sound - not silence, and not one loud source."/>
 
                     <CheckBox x:Name="RunUnderLockCheckBox" Content="Keep recording under the lock screen"
                               Foreground="White" FontSize="18" Margin="0,0,0,4"

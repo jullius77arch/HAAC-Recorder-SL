@@ -1223,9 +1223,7 @@ namespace HAAC_Recorder_SL
             UseBestButton.IsEnabled = !_engine.IsRecording && _selectedMode != null;
             ModePickerButton.IsEnabled = !_engine.IsRecording && _availableModes.Count > 1;
 
-            // TEMPORARY - see SpeakerSpikeButton_Click.
-            SpeakerSpikeButton.IsEnabled = !_engine.IsRecording;
-            ToneOnlyButton.IsEnabled = !_engine.IsRecording;
+            AmbientProbeButton.IsEnabled = !_engine.IsRecording;
 
             SettingsOverlay.Visibility = Visibility.Visible;
         }
@@ -1377,156 +1375,120 @@ namespace HAAC_Recorder_SL
         }
 
         /// <summary>
-        /// TEMPORARY. Plays the probe tone with no capture running, to split
-        /// "playback is broken" from "capture suppresses playback". Run this
-        /// first when the spike produces no audible tone - until it is known
-        /// which of those two is happening, nothing the spike measures means
-        /// anything.
+        /// Listens to the room on every capture endpoint worth probing and
+        /// reports, per endpoint, whether its channels are separate
+        /// microphones or processed mixes of the same ones.
+        ///
+        /// Replaces the speaker-probe spike. That approach is dead: WP8.1
+        /// mutes playback while a capture session is live, in both possible
+        /// orderings, so no known source can be got into a recording from
+        /// this app. AmbientProbe needs no source at all.
+        ///
+        /// Handset and communications endpoints are skipped on the same
+        /// grounds the detector skips them - they have never been anything
+        /// but mono here, and every extra capture cycle is another chance to
+        /// leave a Lumia audio endpoint in a bad state.
         /// </summary>
-        private async void ToneOnlyButton_Click(object sender, RoutedEventArgs e)
+        private async void AmbientProbeButton_Click(object sender, RoutedEventArgs e)
         {
             if (_engine.IsRecording)
             {
                 return;
             }
 
-            ToneOnlyButton.IsEnabled = false;
-            SpeakerSpikeButton.IsEnabled = false;
-            SpeakerSpikeText.Text = "Playing a 1500 Hz tone for 3 seconds. Listen.";
-
-            string report;
-
-            try
-            {
-                report = await SpeakerProbeSpike.PlayToneOnlyAsync(0, 3000);
-            }
-            catch (Exception ex)
-            {
-                report = "Tone test failed: " + ex.Message;
-            }
-            finally
-            {
-                ToneOnlyButton.IsEnabled = true;
-                SpeakerSpikeButton.IsEnabled = true;
-            }
-
-            System.Diagnostics.Debug.WriteLine(report);
-
-            var lines = new List<string>(report.Split('\n'));
-            var fileName = await SpeakerProbeSpike.WriteReportFileAsync(lines);
-
-            // Deliberately shows the whole report rather than a summary. It
-            // is short, and the pump tick count in it is the single most
-            // useful number available right now.
-            SpeakerSpikeText.Text = report
-                + (fileName == null ? "" : "\n\nSaved: Music\\recordings\\" + fileName);
-        }
-
-        /// <summary>
-        /// TEMPORARY. Runs the speaker-probe feasibility spike against every
-        /// capture endpoint the phone reports and shows a one-line verdict
-        /// per endpoint. Remove this handler, the two controls in Settings
-        /// and SpeakerProbeSpike.cs once the question is answered.
-        ///
-        /// The full report goes to the debug output and to ProbeLog. Only the
-        /// verdict lines are shown on screen - the report is thirty-odd lines
-        /// and there is nowhere sensible to put it on a phone.
-        ///
-        /// Runs at 2 channels. The question at this stage is whether playback
-        /// and capture coexist at all, and stereo is the likeliest mode to
-        /// work; 4-channel is worth trying only once that answer is yes.
-        /// </summary>
-        private async void SpeakerSpikeButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_engine.IsRecording)
-            {
-                return;
-            }
-
-            SpeakerSpikeButton.IsEnabled = false;
+            AmbientProbeButton.IsEnabled = false;
             SettingsCloseButton.IsEnabled = false;
-            SpeakerSpikeText.Text = "Running. Keep the room quiet.";
 
             var summary = new List<string>();
 
-            // Every endpoint's full report, accumulated into one file rather
-            // than one file per endpoint: the whole point of the run is
-            // comparing the endpoints against each other, and that is far
-            // easier when they are side by side in a single document.
             var fullReport = new List<string>();
-            fullReport.Add("Speaker probe spike - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            fullReport.Add("Ambient coherence probe - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             fullReport.Add("");
 
             try
             {
                 var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
 
-                if (devices.Count == 0)
-                {
-                    summary.Add("No capture endpoints reported.");
-                    fullReport.Add("No capture endpoints reported.");
-                }
-
-                // Both orders, because the platform was observed muting a tone
-                // that starts while a capture is already live. If the
-                // tone-first order survives where the other doesn't, that is
-                // the whole feature rescued; if neither does, the approach is
-                // dead and we stop spending time on it.
-                var orders = new[] { true, false };
-
+                var targets = new List<DeviceInformation>();
                 foreach (var device in devices)
                 {
-                    foreach (var playFirst in orders)
+                    if (!ModeRanking.IsExcludedFromDetection(device.Name))
                     {
-                        var label = device.Name + (playFirst ? " [tone first]" : " [capture first]");
-
-                        SpeakerSpikeText.Text = "Testing " + label + "...";
-
-                        var report = await SpeakerProbeSpike.RunAsync(device.Id, 2, 0, playFirst);
-
-                        System.Diagnostics.Debug.WriteLine("### " + label);
-                        System.Diagnostics.Debug.WriteLine(report);
-
-                        fullReport.Add("################ " + label + " ################");
-                        fullReport.AddRange(report.Split('\n'));
-                        fullReport.Add("");
-
-                        summary.Add(label + ": " + ExtractVerdict(report));
-
-                        // Same pause the detector uses between probes. Some
-                        // Lumia drivers don't release the capture endpoint
-                        // immediately, and this runs several
-                        // init/start/stop/dispose cycles back to back.
-                        await Task.Delay(400);
+                        targets.Add(device);
                     }
+                }
+
+                if (targets.Count == 0)
+                {
+                    summary.Add("No endpoints worth probing.");
+                }
+
+                for (int i = 0; i < targets.Count; i++)
+                {
+                    var device = targets[i];
+
+                    AmbientProbeText.Text = string.Format(
+                        "Listening on {0} ({1} of {2}). About {3}s.",
+                        device.Name, i + 1, targets.Count, AmbientProbe.DefaultSeconds);
+
+                    var report = await AmbientProbe.RunAsync(
+                        device.Id, device.Name, 2, AmbientProbe.DefaultSeconds);
+
+                    System.Diagnostics.Debug.WriteLine("### " + device.Name);
+                    System.Diagnostics.Debug.WriteLine(report);
+
+                    fullReport.Add("################ " + device.Name + " ################");
+                    fullReport.AddRange(report.Split('\n'));
+                    fullReport.Add("");
+
+                    summary.Add(ShortName(device.Name) + ": " + ExtractHeadline(report));
+
+                    // The detector's pause between probes, for the same
+                    // reason: some Lumia drivers don't release the capture
+                    // endpoint immediately.
+                    await Task.Delay(400);
                 }
             }
             catch (Exception ex)
             {
-                summary.Add("Spike failed: " + ex.Message);
-                fullReport.Add("Spike failed: " + ex.Message);
+                summary.Add("Probe failed: " + ex.Message);
+                fullReport.Add("Probe failed: " + ex.Message);
             }
             finally
             {
-                SpeakerSpikeButton.IsEnabled = true;
+                AmbientProbeButton.IsEnabled = true;
                 SettingsCloseButton.IsEnabled = true;
             }
 
-            var fileName = await SpeakerProbeSpike.WriteReportFileAsync(fullReport);
+            var fileName = await AmbientProbe.WriteReportFileAsync(fullReport);
 
             summary.Add(fileName == null
-                ? "Could not write the report file. Full report is in the debug output."
+                ? "Could not write the report file."
                 : "Full report: Music\\recordings\\" + fileName);
 
-            SpeakerSpikeText.Text = string.Join("\n", summary.ToArray());
+            AmbientProbeText.Text = string.Join("\n", summary.ToArray());
+        }
+
+        private static string ShortName(string deviceName)
+        {
+            var name = deviceName ?? string.Empty;
+
+            int paren = name.IndexOf('(');
+            if (paren > 0)
+            {
+                name = name.Substring(0, paren);
+            }
+
+            return name.Trim();
         }
 
         /// <summary>
-        /// The one line worth showing from a spike report. Falls back to
-        /// something honest rather than an empty string when the report
-        /// failed before it reached a verdict.
+        /// The one conclusion worth showing per endpoint. Looks for the
+        /// verdict keywords AmbientProbe emits, in the order that a worse
+        /// finding should win: a mono-duplicated endpoint is the headline
+        /// even if a coherence verdict was also printed.
         /// </summary>
-        private static string ExtractVerdict(string report)
+        private static string ExtractHeadline(string report)
         {
             if (string.IsNullOrEmpty(report))
             {
@@ -1537,21 +1499,37 @@ namespace HAAC_Recorder_SL
 
             foreach (var line in lines)
             {
-                var trimmed = line.Trim();
-
-                if (trimmed.StartsWith("VERDICT:"))
+                if (line.Trim().StartsWith("FAILED:"))
                 {
-                    return trimmed.Substring("VERDICT:".Length).Trim();
+                    return line.Trim();
                 }
             }
 
             foreach (var line in lines)
             {
-                var trimmed = line.Trim();
-
-                if (trimmed.StartsWith("FAILED:"))
+                if (line.Trim().StartsWith("MONO DUPLICATED"))
                 {
-                    return trimmed;
+                    return "mono duplicated across channels";
+                }
+            }
+
+            foreach (var line in lines)
+            {
+                var t = line.Trim();
+
+                if (t.StartsWith("SEPARATE MICROPHONES"))
+                {
+                    return "separate microphones";
+                }
+
+                if (t.StartsWith("SHARED SOURCE"))
+                {
+                    return "processed mixes of shared mics";
+                }
+
+                if (t.StartsWith("INCONCLUSIVE"))
+                {
+                    return "inconclusive";
                 }
             }
 
