@@ -90,6 +90,45 @@ namespace HAAC_Recorder_SL
         }
 
         /// <summary>
+        /// Holds the display awake for the duration of a short foreground
+        /// diagnostic, and lets it sleep again afterwards.
+        ///
+        /// This is UserIdleDetectionMode, the property the constructor above
+        /// deliberately refuses to touch - so the exception needs justifying.
+        /// The two reasons for avoiding it are that a display which never
+        /// sleeps is the largest avoidable drain on a four-hour take, and that
+        /// suppressing the lock would mask the very behaviour a recorder has
+        /// to get right. Neither applies to a microphone analysis that runs
+        /// for about a minute, in the foreground, while the user stands over
+        /// the phone waiting for it: nothing there is testing lock behaviour,
+        /// and one minute of screen is nothing beside four hours.
+        ///
+        /// Unlike ApplicationIdleDetectionMode this property is two-way, which
+        /// is the whole reason this can be scoped rather than permanent. It is
+        /// never touched while recording.
+        ///
+        /// Returns true if the request took effect, so a caller can warn the
+        /// user when it did not.
+        /// </summary>
+        public static bool SuppressScreenTimeout(bool suppress)
+        {
+            try
+            {
+                PhoneApplicationService.Current.UserIdleDetectionMode =
+                    suppress ? IdleDetectionMode.Disabled : IdleDetectionMode.Enabled;
+
+                return true;
+            }
+            catch
+            {
+                // Restoring must never throw into a finally block, and failing
+                // to hold the screen awake is a degraded diagnostic rather
+                // than a broken app.
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Requests that the OS not deactivate this app when the phone locks.
         ///
         /// Two things worth knowing about this property:

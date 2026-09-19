@@ -1410,12 +1410,19 @@ namespace HAAC_Recorder_SL
             // strand a MediaCapture exactly as deactivation would.
             _detectionRunning = true;
 
-            if (!App.RunningUnderLockScreenEnabled)
+            // The pass takes about a minute, which is longer than the 30
+            // second and 1 minute screen timeouts. Holding the display awake
+            // for that minute means the probe can be started and left alone,
+            // rather than needing the lock-screen preference turned on and the
+            // app relaunched first. Restored in the finally below.
+            bool screenHeld = App.SuppressScreenTimeout(true);
+
+            if (!screenHeld && !App.RunningUnderLockScreenEnabled)
             {
                 AmbientProbeText.Text =
-                    "Note: lock-screen running is off, so letting the screen time out"
-                    + " will cut this short. Keep the screen awake, or turn it on in"
-                    + " Settings and relaunch.";
+                    "Note: the screen timeout could not be held off and lock-screen"
+                    + " running is off, so letting the screen lock will cut this short."
+                    + " Tap the screen occasionally.";
             }
 
             var summary = new List<string>();
@@ -1475,6 +1482,11 @@ namespace HAAC_Recorder_SL
             }
             finally
             {
+                // Unconditionally, even if the suppression failed to apply:
+                // letting the display sleep again is the state this app wants
+                // to be in the moment the diagnostic is over.
+                App.SuppressScreenTimeout(false);
+
                 _detectionRunning = false;
                 AmbientProbeButton.IsEnabled = true;
                 SettingsCloseButton.IsEnabled = true;
