@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
@@ -466,7 +466,9 @@ namespace HAAC_Recorder_SL
             }
 
             report.Add("");
-            AppendIdentityCheck(report, pcm, channels);
+            var silent = FindSilentChannels(pcm, channels);
+
+            AppendIdentityCheck(report, pcm, channels, silent);
 
             report.Add("");
             report.Add("Magnitude-squared coherence (0 = independent, 1 = same signal):");
@@ -513,8 +515,6 @@ namespace HAAC_Recorder_SL
                 }
             }
 
-            var silent = FindSilentChannels(pcm, channels);
-
             idx = 0;
             for (int a = 0; a < channels; a++)
             {
@@ -525,10 +525,10 @@ namespace HAAC_Recorder_SL
                     if (silent[a] || silent[c])
                     {
                         report.Add(string.Format(
-                            "Pair {0}-{1}: skipped, {2} carries no signal at all.",
+                            "Pair {0}-{1}: skipped, {2} no signal at all.",
                             a, c, silent[a] && silent[c]
-                                ? "both channels"
-                                : "ch" + (silent[a] ? a : c)));
+                                ? "neither channel carries"
+                                : "ch" + (silent[a] ? a : c) + " carries"));
                     }
                     else
                     {
@@ -699,18 +699,46 @@ namespace HAAC_Recorder_SL
         /// coherence number is read. Coherence on two copies of one signal is
         /// 1.00 everywhere and means nothing.
         /// </summary>
-        private static void AppendIdentityCheck(List<string> report, PcmPayload pcm, int channels)
+        private static void AppendIdentityCheck(
+            List<string> report, PcmPayload pcm, int channels, bool[] silent)
         {
             int bytesPerFrame = channels * BytesPerSample;
             int frames = pcm.DataLength / bytesPerFrame;
             int check = Math.Min(frames, SampleRateHz * 2);
 
             var duplicates = new List<string>();
+            var empties = new List<string>();
+
+            for (int ch = 0; ch < channels; ch++)
+            {
+                if (silent[ch])
+                {
+                    empties.Add("ch" + ch);
+                }
+            }
 
             for (int i = 1; i < channels; i++)
             {
+                // Two empty channels are byte-identical by definition, and
+                // calling that a duplicate is worse than saying nothing: it
+                // reads as a driver copying a real signal when in fact there
+                // is no signal at all. Requesting more channels than an
+                // endpoint has produces exactly this - a 1520's Microphone
+                // Array takes a 4-channel request and returns two real
+                // channels plus two empty ones, which was being reported as
+                // "ch3 is a byte-exact copy of ch2".
+                if (silent[i])
+                {
+                    continue;
+                }
+
                 for (int j = 0; j < i; j++)
                 {
+                    if (silent[j])
+                    {
+                        continue;
+                    }
+
                     bool identical = true;
 
                     for (int frame = 0; frame < check && identical; frame++)
@@ -733,18 +761,29 @@ namespace HAAC_Recorder_SL
                 }
             }
 
+            if (empties.Count > 0)
+            {
+                report.Add(string.Format(
+                    "EMPTY CHANNELS: {0} carry no signal at all - this endpoint has fewer",
+                    string.Join(", ", empties.ToArray())));
+                report.Add(string.Format(
+                    "  real channels than the {0} requested.", channels));
+            }
+
             if (duplicates.Count == 0)
             {
-                report.Add("Channels are byte-distinct.");
+                report.Add(empties.Count > 0
+                    ? "The remaining channels are byte-distinct."
+                    : "Channels are byte-distinct.");
             }
             else
             {
-                report.Add("MONO DUPLICATED:");
+                report.Add("DUPLICATED:");
                 foreach (var d in duplicates)
                 {
                     report.Add("  " + d);
                 }
-                report.Add("  Coherence below will read 1.00 everywhere and means nothing here.");
+                report.Add("  Coherence for those pairs reads 1.00 and means nothing.");
             }
         }
 
