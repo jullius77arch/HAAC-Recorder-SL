@@ -61,12 +61,24 @@ namespace HAAC_Recorder_SL
     /// WHAT IT CANNOT DO
     ///
     /// It cannot measure arrival-time geometry - that needed the speaker.
-    /// It assumes the room is reverberant rather than a single loud point
-    /// source, which would keep coherence high for real microphones too. The
-    /// defence against that is comparison: run every endpoint back to back in
-    /// the same room in one pass, and the assumption is shared by all of them,
-    /// so the ranking between endpoints stays meaningful even where the
-    /// absolute numbers drift.
+    ///
+    /// It assumes the room is reverberant rather than dominated by one loud
+    /// source. That assumption fails in both directions. Too quiet and the
+    /// ambient drops under the elements' own self-noise, which is
+    /// uncorrelated and mimics separation; the low-band gate catches that.
+    /// Too directional - a PA, a band, a single close talker - and both
+    /// elements see the same wavefront, which mimics derivation; nothing
+    /// catches that automatically, because the low bands look perfect, so a
+    /// loud level only raises it as a possibility.
+    ///
+    /// The defence in both cases is comparison: run every endpoint back to
+    /// back in one pass and the assumption is shared by all of them, so the
+    /// ranking between endpoints holds even where the absolute numbers drift.
+    /// At a gig, run it during applause - loud, broadband and arriving from
+    /// every direction, which is the best field this test can have.
+    ///
+    /// The per-channel levels and clipping figures rest on none of this and
+    /// are valid at any level.
     /// </summary>
     public static class AmbientProbe
     {
@@ -145,6 +157,15 @@ namespace HAAC_Recorder_SL
         // them rather than at the -70 dBFS it started at - which called six
         // failed measurements healthy.
         private const double QuietRoomWarningDb = -55.0;
+
+        // The opposite failure. The coherence test assumes a roughly diffuse
+        // field; a loud one usually is not, because what made it loud is a
+        // PA or a band in one direction. Two elements then see nearly the
+        // same wavefront, and a pure delay does not reduce coherence at any
+        // frequency, so separated microphones read as derived. Nothing
+        // catches this automatically - the low bands look perfect - so the
+        // level is used to raise the possibility.
+        private const double LoudFieldWarningDb = -30.0;
 
         public const int DefaultSeconds = 20;
 
@@ -485,6 +506,17 @@ namespace HAAC_Recorder_SL
             report.Add(string.Format("Level    : {0:0.0} dBFS RMS across all channels", rmsDb));
             report.Add(string.Format("Bias floor for uncorrelated channels: {0:0.000}", floor));
 
+            if (rmsDb > LoudFieldWarningDb)
+            {
+                report.Add("NOTE: loud enough that the field is probably directional - a PA, a");
+                report.Add("  band, one dominant source. Two microphones then see nearly the same");
+                report.Add("  wavefront, a pure delay does not reduce coherence at all, and real");
+                report.Add("  separated elements read as SHARED SOURCE. The per-channel levels and");
+                report.Add("  clipping below are unaffected and are the numbers to read here.");
+                report.Add("  For a usable coherence result at a gig, run this during applause:");
+                report.Add("  loud, broadband and arriving from everywhere at once.");
+            }
+
             if (rmsDb < QuietRoomWarningDb)
             {
                 report.Add(string.Format(
@@ -498,6 +530,9 @@ namespace HAAC_Recorder_SL
             var silent = FindSilentChannels(pcm, channels);
 
             AppendIdentityCheck(report, pcm, channels, silent);
+
+            report.Add("");
+            AppendLevelReport(report, pcm, channels, silent);
 
             report.Add("");
             report.Add("Magnitude-squared coherence (0 = independent, 1 = same signal):");
@@ -567,6 +602,134 @@ namespace HAAC_Recorder_SL
                     idx++;
                 }
             }
+        }
+
+        /// <summary>
+        /// Per-channel peak, RMS, crest factor and clipping.
+        ///
+        /// This is the part of the report that works at a concert. The
+        /// coherence test above leans on the sound field being roughly
+        /// diffuse, which a PA-dominated room is not - during a song two
+        /// microphones see nearly the same wavefront from nearly the same
+        /// direction, a pure delay does not reduce coherence at all, and
+        /// genuinely separate elements will read as shared. None of the
+        /// numbers below care about any of that.
+        ///
+        /// What they answer, for a recorder built around microphones rated
+        /// for very high SPL:
+        ///
+        ///   Clipping - whether the endpoint preserves that headroom or
+        ///   throws it away. A run of consecutive samples pinned at full
+        ///   scale is the signature; isolated full-scale samples are not, and
+        ///   are counted separately so a single loud transient is not
+        ///   reported as a fault.
+        ///
+        ///   Crest factor (peak minus RMS) - whether something is limiting.
+        ///   Read it by COMPARING endpoints in the same field rather than
+        ///   against an absolute number, since it depends on the material:
+        ///   an endpoint that returns a markedly lower crest factor than
+        ///   another on the same sound is compressing it.
+        ///
+        ///   Per-channel RMS - whether the level gap between endpoints
+        ///   closes when the room gets loud. A gap that closes was
+        ///   level-dependent noise suppression; a gap that holds is just how
+        ///   that endpoint is calibrated.
+        /// </summary>
+        private static void AppendLevelReport(
+            List<string> report, PcmPayload pcm, int channels, bool[] silent)
+        {
+            int bytesPerFrame = channels * BytesPerSample;
+            int frames = pcm.DataLength / bytesPerFrame;
+
+            report.Add("Per channel:");
+            report.Add("     peak dBFS   rms dBFS   crest dB   full-scale samples   longest run");
+
+            bool anyClipping = false;
+
+            for (int ch = 0; ch < channels; ch++)
+            {
+                if (silent[ch])
+                {
+                    report.Add(string.Format("  ch{0}        (empty)", ch));
+                    continue;
+                }
+
+                int peak = 0;
+                double sumSquares = 0.0;
+                int clippedSamples = 0;
+                int clippedRuns = 0;
+                int longestRun = 0;
+                int run = 0;
+
+                for (int frame = 0; frame < frames; frame++)
+                {
+                    int at = pcm.DataOffset + (frame * bytesPerFrame) + (ch * BytesPerSample);
+                    var sample = (short)(pcm.Bytes[at] | (pcm.Bytes[at + 1] << 8));
+
+                    int magnitude = sample == short.MinValue
+                        ? short.MaxValue
+                        : Math.Abs(sample);
+
+                    if (magnitude > peak)
+                    {
+                        peak = magnitude;
+                    }
+
+                    sumSquares += (double)sample * sample;
+
+                    if (magnitude >= short.MaxValue)
+                    {
+                        clippedSamples++;
+                        run++;
+
+                        if (run > longestRun)
+                        {
+                            longestRun = run;
+                        }
+
+                        // Three in a row is the threshold for calling it
+                        // clipping rather than a transient that happened to
+                        // touch full scale once. Counted at exactly 3 so a
+                        // single long run increments this once, not once per
+                        // sample.
+                        if (run == 3)
+                        {
+                            clippedRuns++;
+                        }
+                    }
+                    else
+                    {
+                        run = 0;
+                    }
+                }
+
+                double rms = Math.Sqrt(sumSquares / Math.Max(frames, 1));
+                double peakDb = 20.0 * Math.Log10(Math.Max(peak, 1) / (double)short.MaxValue);
+                double rmsDb = 20.0 * Math.Log10(Math.Max(rms, 1e-9) / short.MaxValue);
+
+                if (clippedRuns > 0)
+                {
+                    anyClipping = true;
+                }
+
+                report.Add(string.Format(
+                    "  ch{0}     {1,8:0.0}   {2,8:0.0}   {3,8:0.0}   {4,18}   {5,11}",
+                    ch, peakDb, rmsDb, peakDb - rmsDb, clippedSamples, longestRun));
+            }
+
+            if (anyClipping)
+            {
+                report.Add("  CLIPPING - full scale held for three or more samples in a row.");
+                report.Add("    Whatever the microphones can take, this path is throwing the top");
+                report.Add("    of it away.");
+            }
+            else
+            {
+                report.Add("  No clipping (no run of three or more samples at full scale).");
+            }
+
+            report.Add("  Crest factor is only meaningful compared against another endpoint on");
+            report.Add("  the same sound: the lower one is compressing.");
         }
 
         /// <summary>
