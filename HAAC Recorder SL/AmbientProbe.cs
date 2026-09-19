@@ -89,8 +89,33 @@ namespace HAAC_Recorder_SL
         // separated microphones and shared-source channels diverge hardest.
         private static readonly int[] HighBands = { 5000, 8000, 12000 };
 
+        // The validity gate. Two microphones a few centimetres apart are
+        // almost perfectly coherent at 250-500 Hz whatever else is true of
+        // them - the wavelength is metres long, so both see the same
+        // pressure. If the low bands are NOT coherent, the measurement is
+        // dominated by something uncorrelated, which in practice means the
+        // ambient sound sat below the microphones' own self-noise and
+        // self-noise is what got measured.
+        //
+        // This matters because self-noise is uncorrelated at every frequency,
+        // so a noise-dominated run looks exactly like separated microphones
+        // to the high-band test. Seven runs on a 1520 showed precisely that:
+        // six sat at -57 to -61 dBFS and read near zero in every band
+        // including 250 Hz, while the one run at -51.9 dBFS produced a
+        // textbook decay from 0.92 down. All seven were reported as separate
+        // microphones; only one had earned it.
+        private static readonly int[] LowBands = { 250, 500 };
+
+        private const double LowBandValidityFloor = 0.50;
+
         private const double SeparateMicsCeiling = 0.15;
         private const double SharedSourceFloor = 0.50;
+
+        // Measured, not guessed. On the runs above, -51.9 dBFS produced a
+        // usable result and -57 dBFS did not, so the warning belongs between
+        // them rather than at the -70 dBFS it started at - which called six
+        // failed measurements healthy.
+        private const double QuietRoomWarningDb = -55.0;
 
         public const int DefaultSeconds = 20;
 
@@ -144,12 +169,72 @@ namespace HAAC_Recorder_SL
             get { return _inFlight != null; }
         }
 
+        // Highest first. Four channels is the interesting case and the one the
+        // app's own mode ranking prefers, so it is what gets probed when the
+        // endpoint will accept it. An endpoint that accepts four and fills two
+        // of them with silence is still worth probing at four: the silent
+        // channels are named as such and their pairs skipped, which says
+        // something true about the endpoint rather than hiding it.
+        private static readonly int[] ChannelPreference = { 4, 2 };
+
         /// <summary>
-        /// Records ambient sound on one endpoint and reports what the channel
-        /// relationships say about it. Never throws.
+        /// Probes an endpoint at the most channels it will accept, falling
+        /// back down the preference list when a start is refused. Returns the
+        /// report for whichever attempt got a recording going, or every
+        /// failure if none did.
+        /// </summary>
+        public static async Task<string> RunBestAsync(
+            string deviceId, string deviceName, int seconds)
+        {
+            var failures = new List<string>();
+
+            for (int i = 0; i < ChannelPreference.Length; i++)
+            {
+                var outcome = await RunOnceAsync(
+                    deviceId, deviceName, ChannelPreference[i], seconds);
+
+                if (outcome.Started)
+                {
+                    return outcome.Report;
+                }
+
+                failures.Add(outcome.Report);
+
+                // The detector's pause. A refused start still touched the
+                // endpoint, and some Lumia drivers need a moment afterwards.
+                await Task.Delay(400);
+            }
+
+            return string.Join(Environment.NewLine, failures.ToArray());
+        }
+
+        private sealed class RunOutcome
+        {
+            public string Report;
+            public bool Started;
+        }
+
+        /// <summary>
+        /// Records ambient sound on one endpoint at one channel count and
+        /// reports what the channel relationships say about it. Never throws.
         /// </summary>
         public static async Task<string> RunAsync(
             string deviceId, string deviceName, int channels, int seconds)
+        {
+            var outcome = await RunOnceAsync(deviceId, deviceName, channels, seconds);
+            return outcome.Report;
+        }
+
+        private static async Task<RunOutcome> RunOnceAsync(
+            string deviceId, string deviceName, int channels, int seconds)
+        {
+            var result = new RunOutcome();
+            result.Report = await RunCoreAsync(deviceId, deviceName, channels, seconds, result);
+            return result;
+        }
+
+        private static async Task<string> RunCoreAsync(
+            string deviceId, string deviceName, int channels, int seconds, RunOutcome outcome)
         {
             if (seconds <= 0)
             {
@@ -185,6 +270,7 @@ namespace HAAC_Recorder_SL
                         ModeDetector.CreateProfile(channels), probeFile);
 
                     _inFlight = capture;
+                    outcome.Started = true;
                 }
                 catch (Exception ex)
                 {
@@ -370,11 +456,13 @@ namespace HAAC_Recorder_SL
             report.Add(string.Format("Level    : {0:0.0} dBFS RMS across all channels", rmsDb));
             report.Add(string.Format("Bias floor for uncorrelated channels: {0:0.000}", floor));
 
-            if (rmsDb < -70.0)
+            if (rmsDb < QuietRoomWarningDb)
             {
-                report.Add("WARNING: the room was very quiet. Coherence needs ambient sound to");
-                report.Add("  work with; re-run somewhere with normal room tone before trusting");
-                report.Add("  anything below.");
+                report.Add(string.Format(
+                    "WARNING: below {0:0} dBFS the ambient tends to sit under the microphones'",
+                    QuietRoomWarningDb));
+                report.Add("  own self-noise, and self-noise is what gets measured. Expect the");
+                report.Add("  low-band validity gate below to reject this run.");
             }
 
             report.Add("");
@@ -425,16 +513,65 @@ namespace HAAC_Recorder_SL
                 }
             }
 
+            var silent = FindSilentChannels(pcm, channels);
+
             idx = 0;
             for (int a = 0; a < channels; a++)
             {
                 for (int c = a + 1; c < channels; c++)
                 {
                     report.Add("");
-                    AppendPairVerdict(report, a, c, coherence[idx]);
+
+                    if (silent[a] || silent[c])
+                    {
+                        report.Add(string.Format(
+                            "Pair {0}-{1}: skipped, {2} carries no signal at all.",
+                            a, c, silent[a] && silent[c]
+                                ? "both channels"
+                                : "ch" + (silent[a] ? a : c)));
+                    }
+                    else
+                    {
+                        AppendPairVerdict(report, a, c, coherence[idx]);
+                    }
+
                     idx++;
                 }
             }
+        }
+
+        /// <summary>
+        /// Channels that are digital zero for the whole recording. A request
+        /// for more channels than the endpoint has can be accepted and then
+        /// filled with silence - on a 1520, Microphone Array takes a
+        /// four-channel request and delivers two real channels plus two empty
+        /// ones. Coherence against an empty channel is meaningless, so those
+        /// pairs are named and skipped rather than scored.
+        /// </summary>
+        private static bool[] FindSilentChannels(PcmPayload pcm, int channels)
+        {
+            var silent = new bool[channels];
+            int bytesPerFrame = channels * BytesPerSample;
+            int frames = pcm.DataLength / bytesPerFrame;
+
+            for (int ch = 0; ch < channels; ch++)
+            {
+                bool allZero = true;
+
+                for (int frame = 0; frame < frames && allZero; frame++)
+                {
+                    int at = pcm.DataOffset + (frame * bytesPerFrame) + (ch * BytesPerSample);
+
+                    if (pcm.Bytes[at] != 0 || pcm.Bytes[at + 1] != 0)
+                    {
+                        allZero = false;
+                    }
+                }
+
+                silent[ch] = allZero;
+            }
+
+            return silent;
         }
 
         private static void AppendPairVerdict(List<string> report, int a, int c, double[] coherence)
@@ -456,8 +593,40 @@ namespace HAAC_Recorder_SL
 
             highMean = highCount == 0 ? 0.0 : highMean / highCount;
 
+            double lowMean = 0.0;
+            int lowCount = 0;
+
+            for (int f = 0; f < Bands.Length; f++)
+            {
+                for (int l = 0; l < LowBands.Length; l++)
+                {
+                    if (Bands[f] == LowBands[l])
+                    {
+                        lowMean += coherence[f];
+                        lowCount++;
+                    }
+                }
+            }
+
+            lowMean = lowCount == 0 ? 0.0 : lowMean / lowCount;
+
             report.Add(string.Format("Pair {0}-{1}:", a, c));
+            report.Add(string.Format("  Low-frequency mean  (250/500):   {0:0.00}", lowMean));
             report.Add(string.Format("  High-frequency mean (5k/8k/12k): {0:0.00}", highMean));
+
+            if (lowMean < LowBandValidityFloor)
+            {
+                report.Add("  MEASUREMENT FAILED - not a finding about the hardware.");
+                report.Add("    Two microphones this close together are always coherent at 250-500");
+                report.Add("    Hz, where the wavelength is over a metre. These are not, so what");
+                report.Add("    was measured is uncorrelated noise rather than the room - the");
+                report.Add("    ambient sat below the microphones' own self-noise.");
+                report.Add("    Re-run with more sound in the room. Nothing below is usable, and");
+                report.Add("    in particular this must NOT be read as 'separate microphones':");
+                report.Add("    self-noise is uncorrelated at every frequency and looks identical");
+                report.Add("    to separation in the high bands.");
+                return;
+            }
 
             if (highMean <= SeparateMicsCeiling)
             {

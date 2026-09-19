@@ -1450,8 +1450,8 @@ namespace HAAC_Recorder_SL
                         "Listening on {0} ({1} of {2}). About {3}s.",
                         device.Name, i + 1, targets.Count, AmbientProbe.DefaultSeconds);
 
-                    var report = await AmbientProbe.RunAsync(
-                        device.Id, device.Name, 2, AmbientProbe.DefaultSeconds);
+                    var report = await AmbientProbe.RunBestAsync(
+                        device.Id, device.Name, AmbientProbe.DefaultSeconds);
 
                     System.Diagnostics.Debug.WriteLine("### " + device.Name);
                     System.Diagnostics.Debug.WriteLine(report);
