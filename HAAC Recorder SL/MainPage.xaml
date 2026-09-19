@@ -230,7 +230,20 @@
                             FontSize="18" Margin="0,0,0,8"/>
                     <Button x:Name="RedetectButton" Content="Run detection again"
                             Click="RedetectButton_Click" HorizontalAlignment="Stretch"
-                            FontSize="18" Margin="0,0,0,24"/>
+                            FontSize="18" Margin="0,0,0,8"/>
+
+                    <!-- Listens to the room on each endpoint in turn and works
+                         out, from how the channels relate to each other,
+                         whether they are separate microphones or processed
+                         mixes of the same ones. Takes about a minute and
+                         needs nothing from the user but ordinary room
+                         sound. -->
+                    <Button x:Name="AmbientProbeButton" Content="Analyse microphones"
+                            Click="AmbientProbeButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18" Margin="0,0,0,6"/>
+                    <TextBlock x:Name="AmbientProbeText" Foreground="Gray" FontSize="14"
+                               TextWrapping="Wrap" Margin="0,0,0,24"
+                               Text="Listens on each microphone endpoint for 20 seconds and reports whether its channels are genuinely separate microphones. Needs ordinary room sound - not silence, and not one loud source."/>
 
                     <CheckBox x:Name="RunUnderLockCheckBox" Content="Keep recording under the lock screen"
                               Foreground="White" FontSize="18" Margin="0,0,0,4"

@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Phone.Controls;
 using Microsoft.Phone.Shell;
+using Windows.Devices.Enumeration;
 using Windows.Phone.Devices.Power;
 using Windows.Storage;
 
@@ -1029,6 +1030,12 @@ namespace HAAC_Recorder_SL
         {
             try
             {
+                // The probe holds its own MediaCapture, separate from the
+                // engine's. Releasing it here is what stops a screen lock
+                // mid-probe from tombstoning the process with the audio
+                // endpoint still held.
+                AmbientProbe.AbortQuietly();
+
                 if (!_engine.IsRecording)
                 {
                     return;
@@ -1222,6 +1229,8 @@ namespace HAAC_Recorder_SL
             UseBestButton.IsEnabled = !_engine.IsRecording && _selectedMode != null;
             ModePickerButton.IsEnabled = !_engine.IsRecording && _availableModes.Count > 1;
 
+            AmbientProbeButton.IsEnabled = !_engine.IsRecording;
+
             SettingsOverlay.Visibility = Visibility.Visible;
         }
 
@@ -1369,6 +1378,194 @@ namespace HAAC_Recorder_SL
                 _detectionRunning = false;
                 RestoreIdleButtons();
             }
+        }
+
+        /// <summary>
+        /// Listens to the room on every capture endpoint worth probing and
+        /// reports, per endpoint, whether its channels are separate
+        /// microphones or processed mixes of the same ones.
+        ///
+        /// Replaces the speaker-probe spike. That approach is dead: WP8.1
+        /// mutes playback while a capture session is live, in both possible
+        /// orderings, so no known source can be got into a recording from
+        /// this app. AmbientProbe needs no source at all.
+        ///
+        /// Handset and communications endpoints are skipped on the same
+        /// grounds the detector skips them - they have never been anything
+        /// but mono here, and every extra capture cycle is another chance to
+        /// leave a Lumia audio endpoint in a bad state.
+        /// </summary>
+        private async void AmbientProbeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_engine.IsRecording)
+            {
+                return;
+            }
+
+            AmbientProbeButton.IsEnabled = false;
+            SettingsCloseButton.IsEnabled = false;
+
+            // Borrows the detection flag, which already blocks the back key
+            // and disables the main buttons. Navigating away mid-probe would
+            // strand a MediaCapture exactly as deactivation would.
+            _detectionRunning = true;
+
+            // The pass takes about a minute, which is longer than the 30
+            // second and 1 minute screen timeouts. Holding the display awake
+            // for that minute means the probe can be started and left alone,
+            // rather than needing the lock-screen preference turned on and the
+            // app relaunched first. Restored in the finally below.
+            bool screenHeld = App.SuppressScreenTimeout(true);
+
+            if (!screenHeld && !App.RunningUnderLockScreenEnabled)
+            {
+                AmbientProbeText.Text =
+                    "Note: the screen timeout could not be held off and lock-screen"
+                    + " running is off, so letting the screen lock will cut this short."
+                    + " Tap the screen occasionally.";
+            }
+
+            var summary = new List<string>();
+
+            var fullReport = new List<string>();
+            fullReport.Add("Ambient coherence probe - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            fullReport.Add("");
+
+            try
+            {
+                var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
+
+                var targets = new List<DeviceInformation>();
+                foreach (var device in devices)
+                {
+                    if (!ModeRanking.IsExcludedFromDetection(device.Name))
+                    {
+                        targets.Add(device);
+                    }
+                }
+
+                if (targets.Count == 0)
+                {
+                    summary.Add("No endpoints worth probing.");
+                }
+
+                for (int i = 0; i < targets.Count; i++)
+                {
+                    var device = targets[i];
+
+                    AmbientProbeText.Text = string.Format(
+                        "Listening on {0} ({1} of {2}). About {3}s.",
+                        device.Name, i + 1, targets.Count, AmbientProbe.DefaultSeconds);
+
+                    var report = await AmbientProbe.RunBestAsync(
+                        device.Id, device.Name, AmbientProbe.DefaultSeconds);
+
+                    System.Diagnostics.Debug.WriteLine("### " + device.Name);
+                    System.Diagnostics.Debug.WriteLine(report);
+
+                    fullReport.Add("################ " + device.Name + " ################");
+                    fullReport.AddRange(report.Split('\n'));
+                    fullReport.Add("");
+
+                    summary.Add(ShortName(device.Name) + ": " + ExtractHeadline(report));
+
+                    // The detector's pause between probes, for the same
+                    // reason: some Lumia drivers don't release the capture
+                    // endpoint immediately.
+                    await Task.Delay(400);
+                }
+            }
+            catch (Exception ex)
+            {
+                summary.Add("Probe failed: " + ex.Message);
+                fullReport.Add("Probe failed: " + ex.Message);
+            }
+            finally
+            {
+                // Unconditionally, even if the suppression failed to apply:
+                // letting the display sleep again is the state this app wants
+                // to be in the moment the diagnostic is over.
+                App.SuppressScreenTimeout(false);
+
+                _detectionRunning = false;
+                AmbientProbeButton.IsEnabled = true;
+                SettingsCloseButton.IsEnabled = true;
+            }
+
+            var fileName = await AmbientProbe.WriteReportFileAsync(fullReport);
+
+            summary.Add(fileName == null
+                ? "Could not write the report file."
+                : "Full report: Music\\recordings\\" + fileName);
+
+            AmbientProbeText.Text = string.Join("\n", summary.ToArray());
+        }
+
+        private static string ShortName(string deviceName)
+        {
+            var name = deviceName ?? string.Empty;
+
+            int paren = name.IndexOf('(');
+            if (paren > 0)
+            {
+                name = name.Substring(0, paren);
+            }
+
+            return name.Trim();
+        }
+
+        /// <summary>
+        /// The one conclusion worth showing per endpoint. Looks for the
+        /// verdict keywords AmbientProbe emits, in the order that a worse
+        /// finding should win: a mono-duplicated endpoint is the headline
+        /// even if a coherence verdict was also printed.
+        /// </summary>
+        private static string ExtractHeadline(string report)
+        {
+            if (string.IsNullOrEmpty(report))
+            {
+                return "no report";
+            }
+
+            var lines = report.Split('\n');
+
+            foreach (var line in lines)
+            {
+                if (line.Trim().StartsWith("FAILED:"))
+                {
+                    return line.Trim();
+                }
+            }
+
+            foreach (var line in lines)
+            {
+                if (line.Trim().StartsWith("MONO DUPLICATED"))
+                {
+                    return "mono duplicated across channels";
+                }
+            }
+
+            foreach (var line in lines)
+            {
+                var t = line.Trim();
+
+                if (t.StartsWith("SEPARATE MICROPHONES"))
+                {
+                    return "separate microphones";
+                }
+
+                if (t.StartsWith("SHARED SOURCE"))
+                {
+                    return "processed mixes of shared mics";
+                }
+
+                if (t.StartsWith("INCONCLUSIVE"))
+                {
+                    return "inconclusive";
+                }
+            }
+
+            return "no verdict reached";
         }
 
         private void UpdateModeDeviceText()
