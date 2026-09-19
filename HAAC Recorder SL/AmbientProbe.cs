@@ -25,23 +25,29 @@ namespace HAAC_Recorder_SL
     /// channel is linearly predictable from another at a given frequency, on a
     /// scale of 0 to 1.
     ///
-    /// The discriminator is what happens at HIGH frequency:
+    /// The discriminator is the DECAY across frequency - how far coherence
+    /// falls between the low bands and the high ones:
     ///
     ///   Two genuinely separated microphones in a reverberant room see a
     ///   roughly diffuse sound field. Diffuse-field coherence follows a sinc
-    ///   law - near 1 at low frequency, decaying to approximately zero once
-    ///   the wavelength is short compared with the spacing. Simulated at 100mm
-    ///   spacing this gives about 0.93 at 250 Hz and 0.00 to 0.03 at 5 kHz and
-    ///   above.
+    ///   law: near 1 at low frequency, where the wavelength dwarfs the
+    ///   spacing and both elements see the same pressure, falling away once
+    ///   it does not.
     ///
     ///   Two beamformer outputs derived from the same microphones are both
     ///   linear combinations of one shared set of signals, so they stay
-    ///   correlated at every frequency. Simulated, this holds around 0.6 to
-    ///   0.7 at 5 kHz and above rather than decaying.
+    ///   correlated at every frequency. They start high and stay there.
     ///
-    /// That gap - roughly 0.02 against roughly 0.65 in the top bands - is the
-    /// entire test, and it needs no tone, no clap and nothing from the user
-    /// beyond a room that is not silent.
+    /// The decay, not the high band on its own, is what carries the answer.
+    /// Where the coherence sits at 12 kHz depends on how far apart the
+    /// elements are, and therefore on how big the phone is - a 928 holds more
+    /// coherence up there than a 1520 simply by being 133mm rather than
+    /// 163mm long. How far it FELL does not depend on that. Measured across
+    /// both handsets, separated elements decay by 0.58 to 0.90 and derived
+    /// channels by 0.00 to 0.38.
+    ///
+    /// It needs no tone, no clap and nothing from the user beyond a room that
+    /// is not silent.
     ///
     /// WHY IT WANTS A LONG RUN
     ///
@@ -108,8 +114,31 @@ namespace HAAC_Recorder_SL
 
         private const double LowBandValidityFloor = 0.50;
 
-        private const double SeparateMicsCeiling = 0.15;
-        private const double SharedSourceFloor = 0.50;
+        // The verdict is taken from the DECAY - low-band mean minus
+        // high-band mean - rather than from the high band alone.
+        //
+        // An absolute high-band threshold conflates two different things. A
+        // 1520's Microphone Array reads 0.01 up there; a 928's Enhanced Audio
+        // Recording Device reads 0.12 to 0.33 across seven runs and kept
+        // landing on "inconclusive". But the 928 is a 133mm phone against the
+        // 1520's 163mm, so its elements are closer together, and closer
+        // elements legitimately hold more coherence at 5-12 kHz. Penalising
+        // that is measuring the phone's size, not its microphones.
+        //
+        // What separated elements always do, whatever their spacing, is
+        // DECAY: coherent at 250-500 Hz where the wavelength dwarfs the
+        // spacing, incoherent once it does not. Channels derived from a
+        // shared set stay wherever they started. Measured across both
+        // handsets:
+        //
+        //   1520 Microphone Array   decay 0.90    separated
+        //   928  Enhanced Audio     decay 0.58-0.67  separated
+        //   1520 Surround Microphone decay 0.13 mean  derived
+        //   any mono-duplicated pair decay 0.00       derived
+        //
+        // Those clusters are far enough apart to threshold between.
+        private const double SeparatedDecayFloor = 0.45;
+        private const double DerivedDecayCeiling = 0.25;
 
         // Measured, not guessed. On the runs above, -51.9 dBFS produced a
         // usable result and -57 dBFS did not, so the warning belongs between
@@ -628,28 +657,33 @@ namespace HAAC_Recorder_SL
                 return;
             }
 
-            if (highMean <= SeparateMicsCeiling)
+            double decay = lowMean - highMean;
+
+            report.Add(string.Format("  Decay (low minus high):          {0:0.00}", decay));
+
+            if (decay >= SeparatedDecayFloor)
             {
-                report.Add("  SEPARATE MICROPHONES. Coherence decays to the floor at high");
-                report.Add("    frequency, which is what physically separated elements in a");
-                report.Add("    reverberant room do, and what two mixes of one shared signal");
-                report.Add("    cannot do.");
+                report.Add("  SEPARATE MICROPHONES. Coherence is high where the wavelength dwarfs");
+                report.Add("    any spacing that fits on a phone and falls away once it does not.");
+                report.Add("    Channels built from one shared set of signals do not do that -");
+                report.Add("    they stay wherever they started.");
 
                 AppendSpacingEstimate(report, coherence);
             }
-            else if (highMean >= SharedSourceFloor)
+            else if (decay <= DerivedDecayCeiling)
             {
-                report.Add("  SHARED SOURCE. The channels stay strongly correlated even where");
-                report.Add("    the wavelength is far shorter than any spacing that fits on this");
-                report.Add("    phone. They are near-certainly two processed mixes built from");
-                report.Add("    the same microphones rather than two microphones.");
+                report.Add("  SHARED SOURCE. The channels stay about as correlated at 12 kHz as at");
+                report.Add("    250 Hz, so their relationship is not being set by the distance");
+                report.Add("    between two microphones. They are near-certainly processed mixes");
+                report.Add("    built from the same elements rather than separate elements.");
             }
             else
             {
-                report.Add("  INCONCLUSIVE. Between the two thresholds. Most likely separated");
-                report.Add("    elements with shared processing applied across them - or a room");
-                report.Add("    dominated by one loud source, which keeps real microphones");
-                report.Add("    correlated. Re-run somewhere with more diffuse background sound.");
+                report.Add("  AMBIGUOUS. Some decay, but less than separated elements produce and");
+                report.Add("    more than shared mixes do. Most likely separated elements with");
+                report.Add("    shared processing across them - or a room dominated by one loud");
+                report.Add("    source, which holds real microphones correlated. Re-run somewhere");
+                report.Add("    with more diffuse background sound before concluding anything.");
             }
         }
 
@@ -678,6 +712,27 @@ namespace HAAC_Recorder_SL
                     double t = (coherence[f - 1] - 0.5) / (coherence[f - 1] - coherence[f]);
                     double crossing = Math.Exp(
                         Math.Log(lowF) + (t * (Math.Log(highF) - Math.Log(lowF))));
+
+                    // A diffuse-field sinc stays down once it has fallen. If
+                    // coherence climbs back over half power in a higher band,
+                    // the field is not behaving diffusely and the crossing is
+                    // not a spacing. A 928 produced exactly this - 0.76, 0.64,
+                    // 0.05 and then back up to 0.59 at 3150 Hz - which yielded
+                    // "136 mm" on a phone only 133 mm long.
+                    for (int later = f + 1; later < Bands.Length; later++)
+                    {
+                        if (coherence[later] > 0.5)
+                        {
+                            report.Add(string.Format(
+                                "    Spacing not readable: coherence falls by {0:0} Hz but climbs",
+                                highF));
+                            report.Add(string.Format(
+                                "    back to {0:0.00} at {1:0} Hz. A diffuse field does not do that,",
+                                coherence[later], Bands[later]));
+                            report.Add("    so the crossing is not a spacing.");
+                            return;
+                        }
+                    }
 
                     double millimetres = 75980.0 / crossing;
 
