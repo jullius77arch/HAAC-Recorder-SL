@@ -433,6 +433,17 @@ namespace HAAC_Recorder_SL
                 _availableModes = cached;
                 _selectedMode = null;
                 FinishModeSetup(true);
+
+                // Pending here means the first-run analysis was offered and
+                // then cut short - the app was closed or a call came in - so
+                // this is still the first run as far as the user is
+                // concerned, and the offer is made again.
+                if (AppSettings.LoadFirstRunAnalysisState() ==
+                    AppSettings.FirstRunAnalysisState.Pending)
+                {
+                    OfferFirstRunAnalysis();
+                }
+
                 return;
             }
 
@@ -1101,6 +1112,19 @@ namespace HAAC_Recorder_SL
                 return;
             }
 
+            if (AnalysisOverlay.Visibility == Visibility.Visible)
+            {
+                // Mid-run, the probe owns the microphone. Otherwise Back
+                // means the same as Skip or Done: the offer is over.
+                if (!_detectionRunning)
+                {
+                    CloseAnalysisOverlay();
+                }
+
+                e.Cancel = true;
+                return;
+            }
+
             if (SetupOverlay.Visibility == Visibility.Visible)
             {
                 // A detection run in progress owns the microphone; leaving
@@ -1134,7 +1158,7 @@ namespace HAAC_Recorder_SL
         {
             try
             {
-                await RunDetectionAsync();
+                await RunDetectionAsync(true);
             }
             catch (Exception ex)
             {
@@ -1152,7 +1176,13 @@ namespace HAAC_Recorder_SL
             FinishModeSetup(false);
         }
 
-        private async Task RunDetectionAsync()
+        /// <summary>
+        /// <paramref name="fromSetupScreen"/> is true when the user started
+        /// this from the setup overlay rather than from Settings. Only that
+        /// path can lead to the first-run analysis offer, and then only if it
+        /// has never been made on this install.
+        /// </summary>
+        private async Task RunDetectionAsync(bool fromSetupScreen)
         {
             _detectionRunning = true;
             SetupDetectButton.IsEnabled = false;
@@ -1181,9 +1211,11 @@ namespace HAAC_Recorder_SL
 
             _detectionRunning = false;
 
+            // Verdicts from any earlier analysis still apply: they describe
+            // the endpoints, which a re-detection does not change.
             _availableModes = result == null || result.Modes == null
                 ? new List<CaptureAttempt>()
-                : result.Modes;
+                : ModeRanking.ApplyIndependence(result.Modes, AppSettings.LoadIndependence());
 
             _selectedMode = null;
 
@@ -1207,6 +1239,417 @@ namespace HAAC_Recorder_SL
             // The chosen mode's channel count feeds the byte rate, so the
             // "recording time available" figure has to move with it.
             await UpdateEstimatedRecordingTimeAsync();
+
+            if (fromSetupScreen &&
+                AppSettings.LoadFirstRunAnalysisState() != AppSettings.FirstRunAnalysisState.Done)
+            {
+                if (ModeRanking.EndpointsToAnalyse(_availableModes).Count > 0)
+                {
+                    AppSettings.SaveFirstRunAnalysisState(AppSettings.FirstRunAnalysisState.Pending);
+                    OfferFirstRunAnalysis();
+                }
+                else
+                {
+                    // Mono only - the emulator, or a phone without an array.
+                    // There is no channel relationship to analyse, so the
+                    // offer would be a 20-second wait for nothing.
+                    AppSettings.SaveFirstRunAnalysisState(AppSettings.FirstRunAnalysisState.Done);
+                }
+            }
+        }
+
+        #endregion
+
+        #region First-run microphone analysis
+
+        /// <summary>
+        /// Shows the analysis overlay in its ready-to-start state, describing
+        /// exactly what is about to happen to which endpoints. Nothing touches
+        /// the microphone until Start is tapped.
+        /// </summary>
+        private void OfferFirstRunAnalysis()
+        {
+            if (_detectionRunning)
+            {
+                return;
+            }
+
+            var targets = ModeRanking.EndpointsToAnalyse(_availableModes);
+            if (targets.Count == 0)
+            {
+                AppSettings.SaveFirstRunAnalysisState(AppSettings.FirstRunAnalysisState.Done);
+                return;
+            }
+
+            int seconds = AmbientProbe.DefaultSeconds;
+
+            AnalysisIntroText.Text = targets.Count == 1
+                ? string.Format(
+                    "Detection found a microphone that records in more than one channel. "
+                    + "Next, the app listens to the room on it for about {0} seconds and works "
+                    + "out whether those channels come from separate microphones or are a "
+                    + "processed mix of the same ones.",
+                    seconds)
+                : string.Format(
+                    "Detection found {0} microphones that record in more than one channel. "
+                    + "Next, the app listens to the room on each one for about {1} seconds - "
+                    + "about {2} seconds in all - and works out whether its channels come from "
+                    + "separate microphones or are a processed mix of the same ones. The "
+                    + "least-processed one becomes your default.",
+                    targets.Count, seconds, targets.Count * seconds);
+
+            AnalysisProgressText.Text = string.Empty;
+            SetAnalysisOverlayButtons(false);
+            AnalysisOverlay.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>
+        /// Before a run: Start and Skip. After one: Done alone, since the
+        /// result is on screen and there is nothing left to decide.
+        /// </summary>
+        private void SetAnalysisOverlayButtons(bool finished)
+        {
+            AnalysisStartButton.Visibility = finished ? Visibility.Collapsed : Visibility.Visible;
+            AnalysisSkipButton.Visibility = finished ? Visibility.Collapsed : Visibility.Visible;
+            AnalysisDoneButton.Visibility = finished ? Visibility.Visible : Visibility.Collapsed;
+
+            AnalysisStartButton.IsEnabled = true;
+            AnalysisSkipButton.IsEnabled = true;
+        }
+
+        private async void AnalysisStartButton_Click(object sender, RoutedEventArgs e)
+        {
+            AnalysisStartButton.IsEnabled = false;
+            AnalysisSkipButton.IsEnabled = false;
+
+            try
+            {
+                var outcome = await RunMicrophoneAnalysisAsync(message =>
+                {
+                    AnalysisProgressText.Text = message;
+                });
+
+                AnalysisProgressText.Text = string.Join("\n", outcome.Summary.ToArray());
+
+                if (outcome.Interrupted)
+                {
+                    // Still Pending, so a relaunch offers it again as well.
+                    AnalysisStartButton.Content = "Try again";
+                    SetAnalysisOverlayButtons(false);
+                    return;
+                }
+
+                AppSettings.SaveFirstRunAnalysisState(AppSettings.FirstRunAnalysisState.Done);
+                SetAnalysisOverlayButtons(true);
+            }
+            catch (Exception ex)
+            {
+                _detectionRunning = false;
+                AnalysisProgressText.Text = "Analysis problem: " + ex.Message;
+                AnalysisStartButton.Content = "Try again";
+                SetAnalysisOverlayButtons(false);
+                RestoreIdleButtons();
+            }
+        }
+
+        private void AnalysisSkipButton_Click(object sender, RoutedEventArgs e)
+        {
+            CloseAnalysisOverlay();
+        }
+
+        private void AnalysisDoneButton_Click(object sender, RoutedEventArgs e)
+        {
+            CloseAnalysisOverlay();
+        }
+
+        /// <summary>
+        /// Skipping and finishing both end the offer for good. The user has
+        /// seen what the test does and where to find it again, which is all
+        /// "only on first run" promises.
+        /// </summary>
+        private void CloseAnalysisOverlay()
+        {
+            AppSettings.SaveFirstRunAnalysisState(AppSettings.FirstRunAnalysisState.Done);
+            AnalysisOverlay.Visibility = Visibility.Collapsed;
+            AnalysisStartButton.Content = "Start";
+
+            ApplyEffectiveMode();
+            ReportRecordingMode();
+            RestoreIdleButtons();
+        }
+
+        /// <summary>
+        /// One line on the main screen saying what the next take will use,
+        /// once the analysis may have changed it.
+        /// </summary>
+        private void ReportRecordingMode()
+        {
+            var mode = EffectiveMode;
+            if (mode == null)
+            {
+                return;
+            }
+
+            StatusText.Text = string.Format("Ready. Recording will use {0}.", DescribeMode(mode));
+        }
+
+        private static string DescribeMode(CaptureAttempt mode)
+        {
+            var text = mode.DisplayName;
+
+            if (mode.Channels >= 2 && AppSettings.IsConclusive(mode.Independence))
+            {
+                text += " (" + ModeRanking.DescribeIndependence(mode.Independence) + ")";
+            }
+
+            return text;
+        }
+
+        #endregion
+
+        #region Microphone analysis (shared)
+
+        private sealed class AnalysisTarget
+        {
+            public string DeviceId;
+            public string DeviceName;
+            public int Channels;
+        }
+
+        private sealed class AnalysisOutcome
+        {
+            public readonly List<string> Summary = new List<string>();
+            public bool Interrupted;
+        }
+
+        /// <summary>
+        /// The endpoints to listen to. Normally those with a verified
+        /// multichannel mode, probed at that mode's channel count so the
+        /// verdict describes what will actually be recorded.
+        ///
+        /// With no multichannel mode on the list - detection was skipped, or
+        /// found only mono - every endpoint detection would consider is
+        /// probed instead, at up to four channels. That keeps the Settings
+        /// button useful as a diagnostic on exactly the phones where
+        /// detection came up short.
+        /// </summary>
+        private async Task<List<AnalysisTarget>> BuildAnalysisTargetsAsync()
+        {
+            var targets = new List<AnalysisTarget>();
+
+            foreach (var mode in ModeRanking.EndpointsToAnalyse(_availableModes))
+            {
+                targets.Add(new AnalysisTarget
+                {
+                    DeviceId = mode.DeviceId,
+                    DeviceName = mode.DeviceName,
+                    Channels = mode.Channels
+                });
+            }
+
+            if (targets.Count > 0)
+            {
+                return targets;
+            }
+
+            var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
+            foreach (var device in devices)
+            {
+                if (!ModeRanking.IsExcludedFromDetection(device.Name))
+                {
+                    targets.Add(new AnalysisTarget
+                    {
+                        DeviceId = device.Id,
+                        DeviceName = device.Name,
+                        Channels = 4
+                    });
+                }
+            }
+
+            return targets;
+        }
+
+        /// <summary>
+        /// Listens to the room on each target endpoint in turn, stores the
+        /// verdicts, re-ranks the mode list with them and writes the full
+        /// report to Music\recordings. Used by both the first-run overlay
+        /// and the Settings button, so the two can never reach different
+        /// conclusions from the same measurement.
+        ///
+        /// Replaces the speaker-probe spike. That approach is dead: WP8.1
+        /// mutes playback while a capture session is live, in both possible
+        /// orderings, so no known source can be got into a recording from
+        /// this app. AmbientProbe needs no source at all.
+        ///
+        /// <paramref name="progress"/> is called on the UI thread: every
+        /// await here resumes on the dispatcher, because the run is always
+        /// started from a click handler.
+        /// </summary>
+        private async Task<AnalysisOutcome> RunMicrophoneAnalysisAsync(Action<string> progress)
+        {
+            var outcome = new AnalysisOutcome();
+
+            // Borrows the detection flag, which already blocks the back key
+            // and disables the main buttons. Navigating away mid-probe would
+            // strand a MediaCapture exactly as deactivation would.
+            _detectionRunning = true;
+            RestoreIdleButtons();
+
+            // A pass takes 20 seconds per endpoint, which on two endpoints
+            // outlasts the 30 second screen timeout. Holding the display
+            // awake means the test can be started and left alone rather than
+            // needing lock-screen running turned on first. Restored in the
+            // finally below.
+            bool screenHeld = App.SuppressScreenTimeout(true);
+
+            string screenNote = !screenHeld && !App.RunningUnderLockScreenEnabled
+                ? "\nThe screen may lock during this, which would cut it short. "
+                  + "Tap the screen now and then."
+                : string.Empty;
+
+            var fresh = new Dictionary<string, ChannelIndependence>(StringComparer.Ordinal);
+
+            var fullReport = new List<string>();
+            fullReport.Add("Ambient coherence probe - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            fullReport.Add("");
+
+            try
+            {
+                var targets = await BuildAnalysisTargetsAsync();
+
+                if (targets.Count == 0)
+                {
+                    outcome.Summary.Add("No microphones worth analysing were found.");
+                }
+
+                for (int i = 0; i < targets.Count; i++)
+                {
+                    var target = targets[i];
+
+                    progress(string.Format(
+                        "Listening on {0} ({1} of {2}). About {3} seconds.{4}",
+                        ShortName(target.DeviceName), i + 1, targets.Count,
+                        AmbientProbe.DefaultSeconds, screenNote));
+
+                    var result = await AmbientProbe.RunBestAsync(
+                        target.DeviceId, target.DeviceName,
+                        AmbientProbe.DefaultSeconds, target.Channels);
+
+                    fullReport.Add("################ " + target.DeviceName + " ################");
+                    fullReport.AddRange(result.Report.Split('\n'));
+                    fullReport.Add("");
+
+                    if (result.Interrupted)
+                    {
+                        outcome.Interrupted = true;
+                        outcome.Summary.Add(
+                            "Interrupted - the app was sent to the background. Nothing from "
+                            + "the interrupted microphone was kept.");
+                        break;
+                    }
+
+                    fresh[target.DeviceId] = result.Verdict;
+
+                    outcome.Summary.Add(string.Format(
+                        "{0}: {1}{2}",
+                        ShortName(target.DeviceName),
+                        ModeRanking.DescribeIndependence(result.Verdict),
+                        string.IsNullOrEmpty(result.Reason) ? string.Empty : " - " + result.Reason));
+
+                    // The detector's pause between probes, for the same
+                    // reason: some Lumia drivers don't release the capture
+                    // endpoint immediately.
+                    await Task.Delay(400);
+                }
+            }
+            catch (Exception ex)
+            {
+                outcome.Summary.Add("Analysis failed: " + ex.Message);
+                fullReport.Add("Analysis failed: " + ex.Message);
+            }
+            finally
+            {
+                // Unconditionally, even if the suppression failed to apply:
+                // letting the display sleep again is the state this app wants
+                // to be in the moment the test is over.
+                App.SuppressScreenTimeout(false);
+                _detectionRunning = false;
+            }
+
+            // Endpoints finished before an interruption are kept - each was
+            // a complete measurement in its own right.
+            var merged = AppSettings.MergeIndependence(fresh);
+            ApplyModeRanking(merged);
+
+            bool anyUnclear = false;
+            foreach (var verdict in fresh.Values)
+            {
+                if (!AppSettings.IsConclusive(verdict))
+                {
+                    anyUnclear = true;
+                }
+            }
+
+            var effective = EffectiveMode;
+            if (effective != null && fresh.Count > 0)
+            {
+                outcome.Summary.Add(string.Empty);
+                outcome.Summary.Add(_selectedMode == null
+                    ? "Recording will use " + DescribeMode(effective) + "."
+                    : "You picked " + DescribeMode(effective) + " in Settings, so that is still used.");
+            }
+
+            if (anyUnclear)
+            {
+                outcome.Summary.Add(
+                    "An unclear result doesn't replace an earlier clear one. Run it again from "
+                    + "Settings somewhere with more background sound.");
+            }
+
+            fullReport.Add("Mode ranking after analysis (best first):");
+            foreach (var mode in _availableModes)
+            {
+                fullReport.Add(string.Format(
+                    "  {0} - {1}", mode.DisplayName, ModeRanking.DescribeIndependence(mode.Independence)));
+            }
+
+            var fileName = await AmbientProbe.WriteReportFileAsync(fullReport);
+            outcome.Summary.Add(fileName == null
+                ? "Could not write the report file."
+                : "Full report: Music\\recordings\\" + fileName);
+
+            RestoreIdleButtons();
+            await UpdateEstimatedRecordingTimeAsync();
+
+            return outcome;
+        }
+
+        /// <summary>
+        /// Re-ranks the mode list with a set of verdicts, keeping a manual
+        /// Settings choice selected. Every instance is replaced by the
+        /// re-rank, so the choice is found again by configuration rather than
+        /// by reference.
+        /// </summary>
+        private void ApplyModeRanking(IDictionary<string, ChannelIndependence> verdicts)
+        {
+            var previous = _selectedMode;
+
+            _availableModes = ModeRanking.ApplyIndependence(_availableModes, verdicts);
+            _selectedMode = null;
+
+            if (previous != null)
+            {
+                foreach (var mode in _availableModes)
+                {
+                    if (mode.SameConfigurationAs(previous))
+                    {
+                        _selectedMode = mode;
+                        break;
+                    }
+                }
+            }
+
+            ApplyEffectiveMode();
         }
 
         #endregion
@@ -1370,7 +1813,7 @@ namespace HAAC_Recorder_SL
                 AppSettings.ClearModeCache();
 
                 SetupStatusText.Text = "Running detection again. Make some noise while it works.";
-                await RunDetectionAsync();
+                await RunDetectionAsync(false);
             }
             catch (Exception ex)
             {
@@ -1381,124 +1824,59 @@ namespace HAAC_Recorder_SL
         }
 
         /// <summary>
-        /// Listens to the room on every capture endpoint worth probing and
-        /// reports, per endpoint, whether its channels are separate
-        /// microphones or processed mixes of the same ones.
-        ///
-        /// Replaces the speaker-probe spike. That approach is dead: WP8.1
-        /// mutes playback while a capture session is live, in both possible
-        /// orderings, so no known source can be got into a recording from
-        /// this app. AmbientProbe needs no source at all.
-        ///
-        /// Handset and communications endpoints are skipped on the same
-        /// grounds the detector skips them - they have never been anything
-        /// but mono here, and every extra capture cycle is another chance to
-        /// leave a Lumia audio endpoint in a bad state.
+        /// The Settings entry point to the same analysis the first-run
+        /// overlay offers - there so the result can be re-checked, or taken
+        /// somewhere with better background sound. The mode picker is
+        /// refreshed afterwards, since the verdicts may have re-ordered it.
         /// </summary>
         private async void AmbientProbeButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_engine.IsRecording)
+            if (_engine.IsRecording || _detectionRunning)
             {
                 return;
             }
 
             AmbientProbeButton.IsEnabled = false;
             SettingsCloseButton.IsEnabled = false;
-
-            // Borrows the detection flag, which already blocks the back key
-            // and disables the main buttons. Navigating away mid-probe would
-            // strand a MediaCapture exactly as deactivation would.
-            _detectionRunning = true;
-
-            // The pass takes about a minute, which is longer than the 30
-            // second and 1 minute screen timeouts. Holding the display awake
-            // for that minute means the probe can be started and left alone,
-            // rather than needing the lock-screen preference turned on and the
-            // app relaunched first. Restored in the finally below.
-            bool screenHeld = App.SuppressScreenTimeout(true);
-
-            if (!screenHeld && !App.RunningUnderLockScreenEnabled)
-            {
-                AmbientProbeText.Text =
-                    "Note: the screen timeout could not be held off and lock-screen"
-                    + " running is off, so letting the screen lock will cut this short."
-                    + " Tap the screen occasionally.";
-            }
-
-            var summary = new List<string>();
-
-            var fullReport = new List<string>();
-            fullReport.Add("Ambient coherence probe - " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-            fullReport.Add("");
+            RedetectButton.IsEnabled = false;
+            UseBestButton.IsEnabled = false;
+            ModePickerButton.IsEnabled = false;
+            CloseModePicker();
 
             try
             {
-                var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
-
-                var targets = new List<DeviceInformation>();
-                foreach (var device in devices)
+                var outcome = await RunMicrophoneAnalysisAsync(message =>
                 {
-                    if (!ModeRanking.IsExcludedFromDetection(device.Name))
-                    {
-                        targets.Add(device);
-                    }
-                }
+                    AmbientProbeText.Text = message;
+                });
 
-                if (targets.Count == 0)
+                AmbientProbeText.Text = string.Join("\n", outcome.Summary.ToArray());
+
+                // A complete manual run covers everything the first-run
+                // offer would have done, so it need not be made again.
+                if (!outcome.Interrupted)
                 {
-                    summary.Add("No endpoints worth probing.");
-                }
-
-                for (int i = 0; i < targets.Count; i++)
-                {
-                    var device = targets[i];
-
-                    AmbientProbeText.Text = string.Format(
-                        "Listening on {0} ({1} of {2}). About {3}s.",
-                        device.Name, i + 1, targets.Count, AmbientProbe.DefaultSeconds);
-
-                    var report = await AmbientProbe.RunBestAsync(
-                        device.Id, device.Name, AmbientProbe.DefaultSeconds);
-
-                    System.Diagnostics.Debug.WriteLine("### " + device.Name);
-                    System.Diagnostics.Debug.WriteLine(report);
-
-                    fullReport.Add("################ " + device.Name + " ################");
-                    fullReport.AddRange(report.Split('\n'));
-                    fullReport.Add("");
-
-                    summary.Add(ShortName(device.Name) + ": " + ExtractHeadline(report));
-
-                    // The detector's pause between probes, for the same
-                    // reason: some Lumia drivers don't release the capture
-                    // endpoint immediately.
-                    await Task.Delay(400);
+                    AppSettings.SaveFirstRunAnalysisState(AppSettings.FirstRunAnalysisState.Done);
                 }
             }
             catch (Exception ex)
             {
-                summary.Add("Probe failed: " + ex.Message);
-                fullReport.Add("Probe failed: " + ex.Message);
+                _detectionRunning = false;
+                AmbientProbeText.Text = "Analysis problem: " + ex.Message;
             }
             finally
             {
-                // Unconditionally, even if the suppression failed to apply:
-                // letting the display sleep again is the state this app wants
-                // to be in the moment the diagnostic is over.
-                App.SuppressScreenTimeout(false);
+                PopulateModePicker();
+                UpdateModeDeviceText();
+                UpdateSettingsHintText();
 
-                _detectionRunning = false;
-                AmbientProbeButton.IsEnabled = true;
+                AmbientProbeButton.IsEnabled = !_engine.IsRecording;
                 SettingsCloseButton.IsEnabled = true;
+                RedetectButton.IsEnabled = !_engine.IsRecording;
+                UseBestButton.IsEnabled = !_engine.IsRecording && _selectedMode != null;
+                ModePickerButton.IsEnabled = !_engine.IsRecording && _availableModes.Count > 1;
+                RestoreIdleButtons();
             }
-
-            var fileName = await AmbientProbe.WriteReportFileAsync(fullReport);
-
-            summary.Add(fileName == null
-                ? "Could not write the report file."
-                : "Full report: Music\\recordings\\" + fileName);
-
-            AmbientProbeText.Text = string.Join("\n", summary.ToArray());
         }
 
         private static string ShortName(string deviceName)
@@ -1514,67 +1892,24 @@ namespace HAAC_Recorder_SL
             return name.Trim();
         }
 
-        /// <summary>
-        /// The one conclusion worth showing per endpoint. Looks for the
-        /// verdict keywords AmbientProbe emits, in the order that a worse
-        /// finding should win: a mono-duplicated endpoint is the headline
-        /// even if a coherence verdict was also printed.
-        /// </summary>
-        private static string ExtractHeadline(string report)
-        {
-            if (string.IsNullOrEmpty(report))
-            {
-                return "no report";
-            }
-
-            var lines = report.Split('\n');
-
-            foreach (var line in lines)
-            {
-                if (line.Trim().StartsWith("FAILED:"))
-                {
-                    return line.Trim();
-                }
-            }
-
-            foreach (var line in lines)
-            {
-                if (line.Trim().StartsWith("MONO DUPLICATED"))
-                {
-                    return "mono duplicated across channels";
-                }
-            }
-
-            foreach (var line in lines)
-            {
-                var t = line.Trim();
-
-                if (t.StartsWith("SEPARATE MICROPHONES"))
-                {
-                    return "separate microphones";
-                }
-
-                if (t.StartsWith("SHARED SOURCE"))
-                {
-                    return "processed mixes of shared mics";
-                }
-
-                if (t.StartsWith("INCONCLUSIVE"))
-                {
-                    return "inconclusive";
-                }
-            }
-
-            return "no verdict reached";
-        }
-
         private void UpdateModeDeviceText()
         {
             var mode = EffectiveMode;
 
-            ModeDeviceText.Text = mode == null
-                ? "No verified modes. A mode will be negotiated when you tap Start."
-                : "Endpoint: " + mode.DeviceName;
+            if (mode == null)
+            {
+                ModeDeviceText.Text = "No verified modes. A mode will be negotiated when you tap Start.";
+                return;
+            }
+
+            var text = "Endpoint: " + mode.DeviceName;
+
+            if (mode.Channels >= 2 && mode.Independence != ChannelIndependence.Unknown)
+            {
+                text += "\nAnalysis: " + ModeRanking.DescribeIndependence(mode.Independence);
+            }
+
+            ModeDeviceText.Text = text;
         }
 
         private void UpdateSettingsHintText()
@@ -1588,8 +1923,38 @@ namespace HAAC_Recorder_SL
                 text += " No multi-channel mode could be verified here, so single-channel capture "
                         + "is all that's listed.";
             }
+            else
+            {
+                var mode = EffectiveMode;
+
+                if (mode != null && mode.Independence == ChannelIndependence.Derived)
+                {
+                    text += _selectedMode == null
+                        ? " This mode's channels are a processed mix of shared microphones - "
+                          + "nothing less processed was found on this phone."
+                        : " This mode's channels are a processed mix of shared microphones.";
+                }
+                else if (AnyMultichannelUnanalysed())
+                {
+                    text += " Tap Analyse microphones to find out which endpoint has separate "
+                            + "microphones and rank it first.";
+                }
+            }
 
             SettingsHintText.Text = text;
+        }
+
+        private bool AnyMultichannelUnanalysed()
+        {
+            foreach (var mode in ModeRanking.EndpointsToAnalyse(_availableModes))
+            {
+                if (mode.Independence == ChannelIndependence.Unknown)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void UpdateRunUnderLockHint()

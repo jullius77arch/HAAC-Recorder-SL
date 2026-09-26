@@ -25,6 +25,21 @@ namespace HAAC_Recorder_SL
         private const string ModeCacheKey = "HaacRecorder.ModeCache";
         private const string RunUnderLockKey = "HaacRecorder.RunUnderLockScreen";
 
+        // Ambient-analysis verdicts, per endpoint. Kept apart from the mode
+        // cache on purpose: "Run detection again" clears that cache, and
+        // throwing away a minute-long measurement of the hardware because
+        // the half-second one was repeated would be a poor trade.
+        private const string IndependenceKey = "HaacRecorder.EndpointIndependence";
+
+        // Absent on a fresh install. Set to Pending the moment first-run
+        // detection finishes, and to Done once the analysis offer has been
+        // completed or declined. Pending surviving to a later launch means
+        // the offer was interrupted - the app was closed, or a call came in -
+        // and it is made again. An install that already had a mode cache
+        // before this setting existed never gets it, which is what "only on
+        // first run" asks for; those users have Settings.
+        private const string FirstRunAnalysisKey = "HaacRecorder.FirstRunAnalysis";
+
         /// <summary>
         /// Opens (creating if necessary) the shared "Music\recordings"
         /// folder. Used for finished takes and for the mode-detection
@@ -90,9 +105,11 @@ namespace HAAC_Recorder_SL
 
                 // A cache written by an older build can hold modes this one
                 // wouldn't offer, in an order it wouldn't produce, so the
-                // same filter and sort the detector uses run here too.
+                // same filter the detector uses runs here too - and the
+                // analysis verdicts are attached before sorting, since they
+                // decide the order as much as the channel count does.
                 list = ModeRanking.FilterRedundantModes(list, null);
-                list.Sort(ModeRanking.CompareModes);
+                list = ModeRanking.ApplyIndependence(list, LoadIndependence());
 
                 // An empty or unreadable cache means "we don't know", not
                 // "nothing works" - fall through to a real probe.
@@ -165,6 +182,164 @@ namespace HAAC_Recorder_SL
             {
                 result = null;
                 return false;
+            }
+        }
+
+        #endregion
+
+        #region Analysis verdicts
+
+        /// <summary>
+        /// Every stored verdict, keyed by device Id. Never null; an
+        /// unreadable store is treated as empty, which ranks exactly as the
+        /// app did before the analysis existed.
+        /// </summary>
+        public static Dictionary<string, ChannelIndependence> LoadIndependence()
+        {
+            var result = new Dictionary<string, ChannelIndependence>(StringComparer.Ordinal);
+
+            try
+            {
+                object stored;
+                if (!ApplicationData.Current.LocalSettings.Values.TryGetValue(IndependenceKey, out stored))
+                {
+                    return result;
+                }
+
+                var text = stored as string;
+                if (string.IsNullOrEmpty(text))
+                {
+                    return result;
+                }
+
+                foreach (var part in text.Split(';'))
+                {
+                    // base64(deviceId):verdict
+                    var bits = part.Split(':');
+                    if (bits.Length != 2)
+                    {
+                        continue;
+                    }
+
+                    string deviceId;
+                    int value;
+                    if (!TryDecodeBase64(bits[0], out deviceId) ||
+                        string.IsNullOrEmpty(deviceId) ||
+                        !int.TryParse(bits[1], out value) ||
+                        !Enum.IsDefined(typeof(ChannelIndependence), value))
+                    {
+                        continue;
+                    }
+
+                    result[deviceId] = (ChannelIndependence)value;
+                }
+            }
+            catch
+            {
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Merges one run's verdicts into the store and returns the merged
+        /// set.
+        ///
+        /// A conclusive verdict (separate or processed) always replaces
+        /// what was there, so re-running is a real re-check. An unclear or
+        /// failed one only fills a gap: a later run in a silent room must not
+        /// erase a good measurement taken somewhere better, because the
+        /// failure is a fact about the room and not about the microphones.
+        /// </summary>
+        public static Dictionary<string, ChannelIndependence> MergeIndependence(
+            IDictionary<string, ChannelIndependence> fresh)
+        {
+            var merged = LoadIndependence();
+
+            if (fresh != null)
+            {
+                foreach (var pair in fresh)
+                {
+                    if (string.IsNullOrEmpty(pair.Key) || pair.Value == ChannelIndependence.Unknown)
+                    {
+                        continue;
+                    }
+
+                    ChannelIndependence existing;
+                    bool hasExisting = merged.TryGetValue(pair.Key, out existing);
+
+                    if (IsConclusive(pair.Value) || !hasExisting || !IsConclusive(existing))
+                    {
+                        merged[pair.Key] = pair.Value;
+                    }
+                }
+            }
+
+            try
+            {
+                var parts = new List<string>();
+                foreach (var pair in merged)
+                {
+                    parts.Add(EncodeBase64(pair.Key) + ":" + ((int)pair.Value).ToString());
+                }
+
+                ApplicationData.Current.LocalSettings.Values[IndependenceKey] = string.Join(";", parts);
+            }
+            catch
+            {
+                // Losing this costs a re-run from Settings, not a recording.
+            }
+
+            return merged;
+        }
+
+        public static bool IsConclusive(ChannelIndependence independence)
+        {
+            return independence == ChannelIndependence.Separated
+                || independence == ChannelIndependence.Derived;
+        }
+
+        #endregion
+
+        #region First-run analysis offer
+
+        public enum FirstRunAnalysisState
+        {
+            NotStarted = 0,
+            Pending = 1,
+            Done = 2
+        }
+
+        public static FirstRunAnalysisState LoadFirstRunAnalysisState()
+        {
+            try
+            {
+                object stored;
+                if (ApplicationData.Current.LocalSettings.Values.TryGetValue(FirstRunAnalysisKey, out stored) &&
+                    stored is int)
+                {
+                    var value = (int)stored;
+                    if (Enum.IsDefined(typeof(FirstRunAnalysisState), value))
+                    {
+                        return (FirstRunAnalysisState)value;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return FirstRunAnalysisState.NotStarted;
+        }
+
+        public static void SaveFirstRunAnalysisState(FirstRunAnalysisState state)
+        {
+            try
+            {
+                ApplicationData.Current.LocalSettings.Values[FirstRunAnalysisKey] = (int)state;
+            }
+            catch
+            {
             }
         }
 

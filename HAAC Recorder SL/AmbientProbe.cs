@@ -219,68 +219,87 @@ namespace HAAC_Recorder_SL
             get { return _inFlight != null; }
         }
 
-        // Highest first. Four channels is the interesting case and the one the
-        // app's own mode ranking prefers, so it is what gets probed when the
-        // endpoint will accept it. An endpoint that accepts four and fills two
-        // of them with silence is still worth probing at four: the silent
-        // channels are named as such and their pairs skipped, which says
-        // something true about the endpoint rather than hiding it.
-        private static readonly int[] ChannelPreference = { 4, 2 };
+        /// <summary>
+        /// One endpoint's result: the full text report for the log file, and
+        /// the verdict the mode ranking acts on.
+        /// </summary>
+        public sealed class ProbeResult
+        {
+            public string Report;
+            public ChannelIndependence Verdict;
+
+            // A plain-language reason to show next to an inconclusive
+            // verdict, so the user knows what to change before re-running.
+            // Null when the verdict needs no explanation.
+            public string Reason;
+
+            // The capture was torn down mid-run - the app was deactivated.
+            // Whatever the partial recording said, it is not trusted, and a
+            // caller analysing several endpoints should stop rather than
+            // start the next one against a backgrounded app.
+            public bool Interrupted;
+        }
 
         /// <summary>
-        /// Probes an endpoint at the most channels it will accept, falling
-        /// back down the preference list when a start is refused. Returns the
-        /// report for whichever attempt got a recording going, or every
-        /// failure if none did.
+        /// Probes an endpoint at <paramref name="maxChannels"/>, falling back
+        /// to two when that start is refused. Returns the result for
+        /// whichever attempt got a recording going, or every failure (as
+        /// Inconclusive) if none did.
+        ///
+        /// Probed at the channel count detection verified rather than always
+        /// at four, so the verdict describes the mode that will actually be
+        /// recorded. Asking a 2-channel endpoint for four works, but only
+        /// adds two empty channels to skip.
         /// </summary>
-        public static async Task<string> RunBestAsync(
-            string deviceId, string deviceName, int seconds)
+        public static async Task<ProbeResult> RunBestAsync(
+            string deviceId, string deviceName, int seconds, int maxChannels)
         {
+            var order = new List<int>();
+            order.Add(maxChannels < 2 ? 2 : maxChannels);
+            if (order[0] > 2)
+            {
+                order.Add(2);
+            }
+
             var failures = new List<string>();
 
-            for (int i = 0; i < ChannelPreference.Length; i++)
+            for (int i = 0; i < order.Count; i++)
             {
-                var outcome = await RunOnceAsync(
-                    deviceId, deviceName, ChannelPreference[i], seconds);
+                var outcome = await RunOnceAsync(deviceId, deviceName, order[i], seconds);
 
                 if (outcome.Started)
                 {
-                    return outcome.Report;
+                    return outcome.Result;
                 }
 
-                failures.Add(outcome.Report);
+                failures.Add(outcome.Result.Report);
 
                 // The detector's pause. A refused start still touched the
                 // endpoint, and some Lumia drivers need a moment afterwards.
                 await Task.Delay(400);
             }
 
-            return string.Join(Environment.NewLine, failures.ToArray());
+            var failed = new ProbeResult();
+            failed.Report = string.Join(Environment.NewLine, failures.ToArray());
+            failed.Verdict = ChannelIndependence.Inconclusive;
+            failed.Reason = "the microphone would not start recording";
+            return failed;
         }
 
         private sealed class RunOutcome
         {
-            public string Report;
+            public ProbeResult Result;
             public bool Started;
-        }
-
-        /// <summary>
-        /// Records ambient sound on one endpoint at one channel count and
-        /// reports what the channel relationships say about it. Never throws.
-        /// </summary>
-        public static async Task<string> RunAsync(
-            string deviceId, string deviceName, int channels, int seconds)
-        {
-            var outcome = await RunOnceAsync(deviceId, deviceName, channels, seconds);
-            return outcome.Report;
         }
 
         private static async Task<RunOutcome> RunOnceAsync(
             string deviceId, string deviceName, int channels, int seconds)
         {
-            var result = new RunOutcome();
-            result.Report = await RunCoreAsync(deviceId, deviceName, channels, seconds, result);
-            return result;
+            var outcome = new RunOutcome();
+            outcome.Result = new ProbeResult();
+            outcome.Result.Verdict = ChannelIndependence.Inconclusive;
+            outcome.Result.Report = await RunCoreAsync(deviceId, deviceName, channels, seconds, outcome);
+            return outcome;
         }
 
         private static async Task<string> RunCoreAsync(
@@ -308,6 +327,7 @@ namespace HAAC_Recorder_SL
                 if (capture == null)
                 {
                     report.Add("FAILED: MediaCapture.InitializeAsync was rejected for this endpoint.");
+                    outcome.Result.Reason = "the microphone would not open";
                     return Join(report);
                 }
 
@@ -327,6 +347,7 @@ namespace HAAC_Recorder_SL
                     report.Add(string.Format(
                         "FAILED: could not start a {0}-channel recording here.", channels));
                     report.Add("  " + ex.Message);
+                    outcome.Result.Reason = "the microphone would not start recording";
                     return Join(report);
                 }
 
@@ -340,8 +361,10 @@ namespace HAAC_Recorder_SL
                     report.Add("INTERRUPTED: the capture was torn down mid-run, most likely by");
                     report.Add("  the screen locking with lock-screen running turned off. The");
                     report.Add("  partial recording is analysed below for what it is worth.");
+                    report.Add("  Its verdict is NOT stored.");
                     report.Add("");
                     capture = null;
+                    outcome.Result.Interrupted = true;
                 }
                 else
                 {
@@ -353,8 +376,23 @@ namespace HAAC_Recorder_SL
                 }
 
                 var started = DateTime.Now;
-                AppendAnalysis(report, await ReadPcmAsync(probeFile), channels);
+
+                string reason;
+                var verdict = AppendAnalysis(report, await ReadPcmAsync(probeFile), channels, out reason);
+
+                if (outcome.Result.Interrupted)
+                {
+                    verdict = ChannelIndependence.Inconclusive;
+                    reason = "the analysis was interrupted";
+                }
+
+                outcome.Result.Verdict = verdict;
+                outcome.Result.Reason = reason;
+
                 report.Add("");
+                report.Add(string.Format("ENDPOINT VERDICT: {0}{1}",
+                    ModeRanking.DescribeIndependence(verdict),
+                    string.IsNullOrEmpty(reason) ? string.Empty : " - " + reason));
                 report.Add(string.Format("Analysis took {0:0.0}s.",
                     (DateTime.Now - started).TotalSeconds));
 
@@ -364,6 +402,8 @@ namespace HAAC_Recorder_SL
             {
                 report.Add("FAILED: unexpected exception.");
                 report.Add("  " + ex.Message);
+                outcome.Result.Verdict = ChannelIndependence.Inconclusive;
+                outcome.Result.Reason = "the analysis hit an unexpected error";
                 return Join(report);
             }
             finally
@@ -375,12 +415,28 @@ namespace HAAC_Recorder_SL
 
         #region Analysis
 
-        private static void AppendAnalysis(List<string> report, PcmPayload pcm, int channels)
+        /// <summary>
+        /// Writes the full analysis to the report and returns the endpoint's
+        /// verdict, combined across every channel pair that carries signal.
+        ///
+        /// The combination is deliberately pessimistic. One byte-identical
+        /// pair or one shared-source pair makes the whole endpoint a
+        /// processed mix, because a mode is only as raw as its least
+        /// independent channel. Every pair has to read as separate for the
+        /// endpoint to earn that verdict, and a pair whose measurement failed
+        /// the low-band gate stops that from happening - the same room sits
+        /// under every pair, so one failing is a warning about all of them.
+        /// </summary>
+        private static ChannelIndependence AppendAnalysis(
+            List<string> report, PcmPayload pcm, int channels, out string reason)
         {
+            reason = null;
+
             if (pcm == null)
             {
                 report.Add("FAILED: the probe file could not be read back or had no data chunk.");
-                return;
+                reason = "the recording could not be read back";
+                return ChannelIndependence.Inconclusive;
             }
 
             int bytesPerFrame = channels * BytesPerSample;
@@ -393,7 +449,8 @@ namespace HAAC_Recorder_SL
             {
                 report.Add(string.Format(
                     "FAILED: only {0} usable frames - far too short to average.", usableFrames));
-                return;
+                reason = "the recording was too short";
+                return ChannelIndependence.Inconclusive;
             }
 
             int blockCount = usableFrames / BlockSamples;
@@ -495,7 +552,8 @@ namespace HAAC_Recorder_SL
             {
                 report.Add(string.Format(
                     "FAILED: only {0} non-silent blocks. The room was effectively silent.", used));
-                return;
+                reason = "the room was too quiet";
+                return ChannelIndependence.Inconclusive;
             }
 
             double rms = Math.Sqrt(sumSquares / (used * (double)BlockSamples * channels));
@@ -529,7 +587,7 @@ namespace HAAC_Recorder_SL
             report.Add("");
             var silent = FindSilentChannels(pcm, channels);
 
-            AppendIdentityCheck(report, pcm, channels, silent);
+            bool anyDuplicate = AppendIdentityCheck(report, pcm, channels, silent);
 
             report.Add("");
             AppendLevelReport(report, pcm, channels, silent);
@@ -579,6 +637,11 @@ namespace HAAC_Recorder_SL
                 }
             }
 
+            int separatedPairs = 0;
+            int derivedPairs = 0;
+            int ambiguousPairs = 0;
+            int failedPairs = 0;
+
             idx = 0;
             for (int a = 0; a < channels; a++)
             {
@@ -596,12 +659,71 @@ namespace HAAC_Recorder_SL
                     }
                     else
                     {
-                        AppendPairVerdict(report, a, c, coherence[idx]);
+                        switch (AppendPairVerdict(report, a, c, coherence[idx]))
+                        {
+                            case ChannelIndependence.Separated:
+                                separatedPairs++;
+                                break;
+                            case ChannelIndependence.Derived:
+                                derivedPairs++;
+                                break;
+                            case ChannelIndependence.Ambiguous:
+                                ambiguousPairs++;
+                                break;
+                            default:
+                                failedPairs++;
+                                break;
+                        }
                     }
 
                     idx++;
                 }
             }
+
+            // Byte-identical channels are a processed endpoint whatever the
+            // room was like - nothing about the field makes two microphones
+            // produce the same samples.
+            if (anyDuplicate)
+            {
+                return ChannelIndependence.Derived;
+            }
+
+            if (derivedPairs > 0)
+            {
+                // The one failure the level can flag but nothing else can:
+                // a loud, directional field holds real microphones coherent
+                // at every frequency, which is exactly what derived channels
+                // look like. Not stored as a finding about the hardware.
+                if (rmsDb > LoudFieldWarningDb)
+                {
+                    reason = "one loud sound source dominated the room";
+                    return ChannelIndependence.Inconclusive;
+                }
+
+                return ChannelIndependence.Derived;
+            }
+
+            if (failedPairs > 0)
+            {
+                reason = "the room was too quiet";
+                return ChannelIndependence.Inconclusive;
+            }
+
+            if (ambiguousPairs > 0)
+            {
+                reason = "the result was borderline - try a room with more background sound";
+                return ChannelIndependence.Ambiguous;
+            }
+
+            if (separatedPairs > 0)
+            {
+                return ChannelIndependence.Separated;
+            }
+
+            // Every pair involved an empty channel: fewer than two channels
+            // carried anything, so there was no relationship to measure.
+            reason = "fewer than two channels carried signal";
+            return ChannelIndependence.Inconclusive;
         }
 
         /// <summary>
@@ -766,7 +888,13 @@ namespace HAAC_Recorder_SL
             return silent;
         }
 
-        private static void AppendPairVerdict(List<string> report, int a, int c, double[] coherence)
+        /// <summary>
+        /// Reports one pair and returns its verdict: Separated, Derived,
+        /// Ambiguous, or Inconclusive when the low-band gate says the
+        /// measurement itself failed.
+        /// </summary>
+        private static ChannelIndependence AppendPairVerdict(
+            List<string> report, int a, int c, double[] coherence)
         {
             double highMean = 0.0;
             int highCount = 0;
@@ -817,7 +945,7 @@ namespace HAAC_Recorder_SL
                 report.Add("    in particular this must NOT be read as 'separate microphones':");
                 report.Add("    self-noise is uncorrelated at every frequency and looks identical");
                 report.Add("    to separation in the high bands.");
-                return;
+                return ChannelIndependence.Inconclusive;
             }
 
             double decay = lowMean - highMean;
@@ -832,22 +960,24 @@ namespace HAAC_Recorder_SL
                 report.Add("    they stay wherever they started.");
 
                 AppendSpacingEstimate(report, coherence);
+                return ChannelIndependence.Separated;
             }
-            else if (decay <= DerivedDecayCeiling)
+
+            if (decay <= DerivedDecayCeiling)
             {
                 report.Add("  SHARED SOURCE. The channels stay about as correlated at 12 kHz as at");
                 report.Add("    250 Hz, so their relationship is not being set by the distance");
                 report.Add("    between two microphones. They are near-certainly processed mixes");
                 report.Add("    built from the same elements rather than separate elements.");
+                return ChannelIndependence.Derived;
             }
-            else
-            {
-                report.Add("  AMBIGUOUS. Some decay, but less than separated elements produce and");
-                report.Add("    more than shared mixes do. Most likely separated elements with");
-                report.Add("    shared processing across them - or a room dominated by one loud");
-                report.Add("    source, which holds real microphones correlated. Re-run somewhere");
-                report.Add("    with more diffuse background sound before concluding anything.");
-            }
+
+            report.Add("  AMBIGUOUS. Some decay, but less than separated elements produce and");
+            report.Add("    more than shared mixes do. Most likely separated elements with");
+            report.Add("    shared processing across them - or a room dominated by one loud");
+            report.Add("    source, which holds real microphones correlated. Re-run somewhere");
+            report.Add("    with more diffuse background sound before concluding anything.");
+            return ChannelIndependence.Ambiguous;
         }
 
         /// <summary>
@@ -915,9 +1045,10 @@ namespace HAAC_Recorder_SL
         /// The byte-exact duplicate test, same rule WavProbe applies, repeated
         /// here so a mono-duplicated endpoint is named as such before any
         /// coherence number is read. Coherence on two copies of one signal is
-        /// 1.00 everywhere and means nothing.
+        /// 1.00 everywhere and means nothing. Returns true when any pair of
+        /// non-empty channels is byte-identical.
         /// </summary>
-        private static void AppendIdentityCheck(
+        private static bool AppendIdentityCheck(
             List<string> report, PcmPayload pcm, int channels, bool[] silent)
         {
             int bytesPerFrame = channels * BytesPerSample;
@@ -1003,6 +1134,8 @@ namespace HAAC_Recorder_SL
                 }
                 report.Add("  Coherence for those pairs reads 1.00 and means nothing.");
             }
+
+            return duplicates.Count > 0;
         }
 
         private static void LoadBlock(PcmPayload pcm, int channels, int frameStart, double[][] into)

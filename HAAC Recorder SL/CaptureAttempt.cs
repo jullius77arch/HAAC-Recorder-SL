@@ -4,6 +4,40 @@ using System.Collections.Generic;
 namespace HAAC_Recorder_SL
 {
     /// <summary>
+    /// What AmbientProbe concluded about an endpoint's channels, from how
+    /// their coherence decays across frequency.
+    ///
+    /// This is a different question from VerifiedIndependentChannels. That
+    /// one is a byte comparison and only proves the channels are not copies.
+    /// Four differently weighted mixes of the same two microphones pass it -
+    /// which is exactly how a 1520's Surround Microphone, the most processed
+    /// endpoint on the phone, came to rank first. This answers whether the
+    /// channels come from physically separate elements.
+    ///
+    /// The numeric values are persisted, so they must not be renumbered.
+    /// </summary>
+    public enum ChannelIndependence
+    {
+        /// <summary>Never analysed.</summary>
+        Unknown = 0,
+
+        /// <summary>Coherence decays with frequency: separate elements.</summary>
+        Separated = 1,
+
+        /// <summary>Coherence holds at every frequency, or the channels are
+        /// byte-identical: processed mixes of a shared set.</summary>
+        Derived = 2,
+
+        /// <summary>Some decay, but not enough to call either way.</summary>
+        Ambiguous = 3,
+
+        /// <summary>The run could not measure anything usable - a silent
+        /// room, a field too loud to be diffuse, a capture that would not
+        /// start. Says nothing about the hardware.</summary>
+        Inconclusive = 4
+    }
+
+    /// <summary>
     /// One capture configuration the app can attempt: a channel count on a
     /// specific audio endpoint, plus whether that combination was actually
     /// proven to deliver independent, non-silent channels.
@@ -29,12 +63,50 @@ namespace HAAC_Recorder_SL
         public readonly string DeviceName;
         public readonly bool VerifiedIndependentChannels;
 
+        // Per endpoint, not per channel count: it describes where the
+        // channels come from, which is a property of the device. Stored
+        // separately from the mode cache (see AppSettings) because it comes
+        // from a different, slower test that is run less often.
+        public readonly ChannelIndependence Independence;
+
         public CaptureAttempt(int channels, string deviceId, string deviceName, bool verified)
+            : this(channels, deviceId, deviceName, verified, ChannelIndependence.Unknown)
+        {
+        }
+
+        public CaptureAttempt(
+            int channels, string deviceId, string deviceName, bool verified,
+            ChannelIndependence independence)
         {
             this.Channels = channels;
             this.DeviceId = deviceId;
             this.DeviceName = string.IsNullOrEmpty(deviceName) ? "Default" : deviceName;
             this.VerifiedIndependentChannels = verified;
+            this.Independence = independence;
+        }
+
+        /// <summary>
+        /// A copy carrying a different analysis verdict. The fields stay
+        /// readonly so a mode can't change under a list that was sorted by
+        /// it; re-ranking builds new instances instead.
+        /// </summary>
+        public CaptureAttempt WithIndependence(ChannelIndependence independence)
+        {
+            return new CaptureAttempt(
+                this.Channels, this.DeviceId, this.DeviceName,
+                this.VerifiedIndependentChannels, independence);
+        }
+
+        /// <summary>
+        /// True when the two describe the same capture configuration, however
+        /// they were constructed. Used to keep a manual Settings choice
+        /// selected across a re-rank, which replaces every instance.
+        /// </summary>
+        public bool SameConfigurationAs(CaptureAttempt other)
+        {
+            return other != null
+                && this.Channels == other.Channels
+                && string.Equals(this.DeviceId, other.DeviceId, StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -92,8 +164,45 @@ namespace HAAC_Recorder_SL
         }
 
         /// <summary>
-        /// Best-first: more verified channels wins, then device name, then
-        /// device Id. The last two express no preference at all — one
+        /// How much the analysis verdict counts for, highest best. Separate
+        /// microphones beat anything unanalysed or unclear, and those beat a
+        /// known processed mix - which stays on the list, because on some
+        /// handset it may be the only multichannel endpoint there is.
+        ///
+        /// Only multichannel modes are tiered. A mono mode has no channel
+        /// relationship to judge, and the verdict for its endpoint was
+        /// measured at a higher channel count anyway.
+        /// </summary>
+        public static int IndependenceTier(CaptureAttempt attempt)
+        {
+            if (EffectiveChannelRank(attempt) < 2)
+            {
+                return 1;
+            }
+
+            switch (attempt.Independence)
+            {
+                case ChannelIndependence.Separated:
+                    return 2;
+                case ChannelIndependence.Derived:
+                    return 0;
+                default:
+                    return 1;
+            }
+        }
+
+        /// <summary>
+        /// Best-first: separate microphones win over processed mixes, then
+        /// more verified channels wins, then device name, then device Id.
+        ///
+        /// The verdict comes first on purpose. This app exists to record the
+        /// least-processed audio the hardware will give, and on a 1520 the
+        /// 4-channel Surround Microphone is four noise-suppressed mixes of
+        /// the same elements, running ~18 dB quieter, while the 2-channel
+        /// Microphone Array is two real microphones. Channel count alone
+        /// picks the wrong one.
+        ///
+        /// Device name and Id express no preference at all — one
         /// endpoint is not better than another because of its name. They
         /// exist because List.Sort is unstable, and on this hardware the four
         /// microphones are two stereo pairs on opposite faces of the phone
@@ -103,6 +212,12 @@ namespace HAAC_Recorder_SL
         /// </summary>
         public static int CompareModes(CaptureAttempt a, CaptureAttempt b)
         {
+            int byIndependence = IndependenceTier(b).CompareTo(IndependenceTier(a));
+            if (byIndependence != 0)
+            {
+                return byIndependence;
+            }
+
             int byChannels = EffectiveChannelRank(b).CompareTo(EffectiveChannelRank(a));
             if (byChannels != 0)
             {
@@ -116,6 +231,100 @@ namespace HAAC_Recorder_SL
             }
 
             return string.Compare(a.DeviceId ?? string.Empty, b.DeviceId ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Attaches each endpoint's stored verdict and re-sorts. Returns new
+        /// instances; the input list is left as it was. A null or empty
+        /// lookup clears every verdict back to Unknown, which is what a mode
+        /// list read from a cache with no analysis behind it should say.
+        /// </summary>
+        public static List<CaptureAttempt> ApplyIndependence(
+            List<CaptureAttempt> modes, IDictionary<string, ChannelIndependence> verdicts)
+        {
+            var result = new List<CaptureAttempt>();
+
+            foreach (var mode in modes)
+            {
+                ChannelIndependence verdict;
+                if (verdicts == null ||
+                    mode.DeviceId == null ||
+                    !verdicts.TryGetValue(mode.DeviceId, out verdict))
+                {
+                    verdict = ChannelIndependence.Unknown;
+                }
+
+                result.Add(mode.WithIndependence(verdict));
+            }
+
+            result.Sort(CompareModes);
+            return result;
+        }
+
+        /// <summary>
+        /// The endpoints worth running the ambient analysis on: those with at
+        /// least one verified multichannel mode, each listed once, in ranking
+        /// order. A mono-only endpoint has no channel relationship to measure,
+        /// and every capture cycle skipped is 20 seconds saved and one less
+        /// chance to leave a Lumia endpoint in a bad state.
+        /// </summary>
+        public static List<CaptureAttempt> EndpointsToAnalyse(List<CaptureAttempt> modes)
+        {
+            var result = new List<CaptureAttempt>();
+
+            foreach (var mode in modes)
+            {
+                if (EffectiveChannelRank(mode) < 2 || string.IsNullOrEmpty(mode.DeviceId))
+                {
+                    continue;
+                }
+
+                bool already = false;
+                for (int i = 0; i < result.Count; i++)
+                {
+                    if (string.Equals(result[i].DeviceId, mode.DeviceId, StringComparison.Ordinal))
+                    {
+                        // Keep the highest channel count seen for the device,
+                        // since that is what gets probed.
+                        if (mode.Channels > result[i].Channels)
+                        {
+                            result[i] = mode;
+                        }
+
+                        already = true;
+                        break;
+                    }
+                }
+
+                if (!already)
+                {
+                    result.Add(mode);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The few words Settings and the analysis summary use for a verdict.
+        /// Plain terms rather than the probe's own vocabulary: the user is
+        /// choosing a microphone, not reading a coherence plot.
+        /// </summary>
+        public static string DescribeIndependence(ChannelIndependence independence)
+        {
+            switch (independence)
+            {
+                case ChannelIndependence.Separated:
+                    return "separate mics";
+                case ChannelIndependence.Derived:
+                    return "processed mix";
+                case ChannelIndependence.Ambiguous:
+                    return "unclear";
+                case ChannelIndependence.Inconclusive:
+                    return "not measured";
+                default:
+                    return "not analysed";
+            }
         }
 
         /// <summary>
@@ -282,6 +491,15 @@ namespace HAAC_Recorder_SL
                 if (!mode.VerifiedIndependentChannels)
                 {
                     label += "  (unverified)";
+                }
+                else if (mode.Channels >= 2 &&
+                         (mode.Independence == ChannelIndependence.Separated ||
+                          mode.Independence == ChannelIndependence.Derived))
+                {
+                    // Only the two conclusive verdicts are worth the width.
+                    // "Unclear" on a picker entry reads as a fault in the
+                    // mode rather than in the room it was measured in.
+                    label += "  (" + DescribeIndependence(mode.Independence) + ")";
                 }
 
                 labels.Add(label);

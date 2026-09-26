@@ -58,9 +58,17 @@ Two consequences worth keeping in mind:
 
 - `WavProbe`'s byte-exact distinctness test **cannot** tell four real microphones
   from four differently-weighted mixes of the same signals - the mixes genuinely
-  are not copies. That is why the 1520's top-ranked mode (4ch Surround) is the
-  more processed one. Channel independence needs a coherence measurement, not a
-  byte comparison.
+  are not copies. Channel independence needs a coherence measurement, not a
+  byte comparison - which is what `AmbientProbe` provides. Its per-endpoint
+  verdict (`ChannelIndependence`) is stored separately from the mode cache and
+  is the **first** ranking key in `ModeRanking.CompareModes`, ahead of channel
+  count. On a 1520 that puts 2ch Microphone Array above 4ch Surround. Without
+  a verdict (analysis skipped or not yet run), ranking falls back to channel
+  count, which picks Surround.
+- The analysis is offered once, after first-run detection on a fresh install
+  (`AppSettings.FirstRunAnalysisState`), and is always available from Settings
+  as "Analyse microphones". An inconclusive re-run never overwrites an earlier
+  conclusive verdict: a quiet room is a fact about the room, not the mics.
 - Do not add `"microphone"` to `ModeRanking.IsExcludedFromDetection`. Any
   `Contains` test would also match "Microphone Array" and "Surround Microphone"
   and exclude everything, and on a handset without an array the bare "Microphone"

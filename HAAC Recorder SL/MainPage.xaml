@@ -176,7 +176,7 @@
                     <TextBlock Text="Check what this phone can do" Foreground="White" FontSize="28"
                                TextWrapping="Wrap" Margin="0,0,0,16"/>
                     <TextBlock x:Name="SetupStatusText" Foreground="Gray" FontSize="17" TextWrapping="Wrap"
-                               Text="The app records a fraction of a second on each microphone and reads it back, to find out which ones really deliver independent channels. It takes a few seconds."
+                               Text="The app records a fraction of a second on each microphone and reads it back, to find out which ones really deliver independent channels. It takes a few seconds. After that, it offers a longer listening test to find the least-processed one."
                                Margin="0,0,0,16"/>
                     <TextBlock Foreground="#FFFFB900" FontSize="16" TextWrapping="Wrap"
                                Text="Make some noise while this runs - talk, or play music. In a silent room every channel records digital zero, which is indistinguishable from a duplicate, and good microphones get rejected."
@@ -189,6 +189,49 @@
                     <Button x:Name="SetupSkipButton" Content="Skip for now"
                             Click="SetupSkipButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- First-run microphone analysis. Offered once, straight after the
+             first detection on a fresh install, and never again - Settings
+             has the same test under "Analyse microphones" for re-checking.
+
+             Detection above only proves channels are not copies of each
+             other. This proves whether they come from separate microphones,
+             which is what decides the default: on a 1520 the 4-channel
+             endpoint is a processed mix and the 2-channel one is two real
+             microphones. The test needs the user to know it is happening -
+             it wants ordinary room sound, and it holds the microphone for
+             20 seconds per endpoint - so it waits for "Start" rather than
+             running on its own.
+
+             AnalysisIntroText is filled in by code, since it names how many
+             endpoints will be tested and how long that takes. -->
+        <Grid x:Name="AnalysisOverlay" Grid.RowSpan="2" Background="Black" Visibility="Collapsed">
+            <ScrollViewer Margin="30,40,30,30">
+                <StackPanel>
+                    <TextBlock Text="Listen to each microphone" Foreground="White" FontSize="28"
+                               TextWrapping="Wrap" Margin="0,0,0,16"/>
+                    <TextBlock x:Name="AnalysisIntroText" Foreground="Gray" FontSize="17"
+                               TextWrapping="Wrap" Margin="0,0,0,16"/>
+                    <TextBlock x:Name="AnalysisAdviceText" Foreground="#FFFFB900" FontSize="16" TextWrapping="Wrap"
+                               Text="Put the phone down in a room with ordinary background sound - a fan, traffic, people talking quietly. Avoid silence, and avoid music from a single speaker. Both can give a wrong answer."
+                               Margin="0,0,0,16"/>
+                    <TextBlock x:Name="AnalysisRerunText" Foreground="Gray" FontSize="15" TextWrapping="Wrap"
+                               Text="You can run this again any time from Settings, with Analyse microphones, to check the result."
+                               Margin="0,0,0,24"/>
+                    <TextBlock x:Name="AnalysisProgressText" Foreground="White" FontSize="18"
+                               TextWrapping="Wrap" Margin="0,0,0,20"/>
+                    <Button x:Name="AnalysisStartButton" Content="Start"
+                            Click="AnalysisStartButton_Click" HorizontalAlignment="Stretch"
+                            Height="86" FontSize="22" Margin="0,0,0,8"/>
+                    <Button x:Name="AnalysisSkipButton" Content="Skip"
+                            Click="AnalysisSkipButton_Click" HorizontalAlignment="Stretch"
+                            FontSize="18"/>
+                    <Button x:Name="AnalysisDoneButton" Content="Done"
+                            Click="AnalysisDoneButton_Click" HorizontalAlignment="Stretch"
+                            Height="86" FontSize="22" Visibility="Collapsed"/>
                 </StackPanel>
             </ScrollViewer>
         </Grid>
@@ -232,18 +275,19 @@
                             Click="RedetectButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18" Margin="0,0,0,8"/>
 
-                    <!-- Listens to the room on each endpoint in turn and works
-                         out, from how the channels relate to each other,
-                         whether they are separate microphones or processed
-                         mixes of the same ones. Takes about a minute and
-                         needs nothing from the user but ordinary room
-                         sound. -->
+                    <!-- Listens to the room on each multichannel endpoint in
+                         turn and works out, from how the channels relate to
+                         each other, whether they are separate microphones or
+                         processed mixes of the same ones. The verdicts are
+                         stored and re-rank the mode list, so an endpoint with
+                         separate microphones becomes the default. The same
+                         test the first-run overlay offers. -->
                     <Button x:Name="AmbientProbeButton" Content="Analyse microphones"
                             Click="AmbientProbeButton_Click" HorizontalAlignment="Stretch"
                             FontSize="18" Margin="0,0,0,6"/>
                     <TextBlock x:Name="AmbientProbeText" Foreground="Gray" FontSize="14"
                                TextWrapping="Wrap" Margin="0,0,0,24"
-                               Text="Listens on each microphone endpoint for 20 seconds and reports whether its channels are genuinely separate microphones. Needs ordinary room sound - not silence, and not one loud source."/>
+                               Text="Listens on each microphone for 20 seconds to find out whether its channels are separate microphones or a processed mix, and makes the least-processed one the default. Needs ordinary room sound - not silence, and not one loud source."/>
 
                     <CheckBox x:Name="RunUnderLockCheckBox" Content="Keep recording under the lock screen"
                               Foreground="White" FontSize="18" Margin="0,0,0,4"
